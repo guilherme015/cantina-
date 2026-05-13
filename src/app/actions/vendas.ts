@@ -16,7 +16,7 @@ export type VendaComItens = Venda & { tab_vendas_itens: VendaItem[] }
 export async function listarVendasHoje(): Promise<VendaComItens[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as VendaComItens[]
 
   const hoje = new Date().toISOString().split("T")[0]
 
@@ -158,7 +158,7 @@ export async function cancelarVenda(id: string) {
 export async function listarItensCardapioHoje(): Promise<Item[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as Item[]
 
   const hoje = new Date().toISOString().split("T")[0]
 

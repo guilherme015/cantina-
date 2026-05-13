@@ -2,11 +2,12 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
-export async function listarContasPagar() {
+export async function listarContasPagar(): Promise<ContaPagar[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as ContaPagar[]
 
   const { data } = await supabase
     .from("tab_contas_pagar")
@@ -14,10 +15,10 @@ export async function listarContasPagar() {
     .eq("user_id", user.id)
     .order("data", { ascending: false })
 
-  return data ?? []
+  return (data ?? []) as ContaPagar[]
 }
 
-export async function criarContaPagar(formData: FormData) {
+export async function criarContaPagar(formData: FormData): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -45,7 +46,7 @@ export async function criarContaPagar(formData: FormData) {
   return { success: true }
 }
 
-export async function pagarConta(id: string) {
+export async function pagarConta(id: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -68,10 +69,10 @@ export async function pagarConta(id: string) {
   if (error) return { error: error.message }
 
   await supabase.from("tab_extrato_financeiro").insert({
-    tipo_movimentacao: "saida",
-    forma_pagamento: "dinheiro",
-    valor: conta.valor,
-    descricao: conta.descricao,
+    tipo_movimentacao: "saida" as const,
+    forma_pagamento: "dinheiro" as const,
+    valor: (conta as ContaPagar).valor,
+    descricao: (conta as ContaPagar).descricao,
     user_id: user.id,
     data_hora: new Date().toISOString(),
   })
@@ -81,10 +82,10 @@ export async function pagarConta(id: string) {
   return { success: true }
 }
 
-export async function listarContasReceber() {
+export async function listarContasReceber(): Promise<ContaReceber[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as ContaReceber[]
 
   const { data } = await supabase
     .from("tab_contas_receber")
@@ -92,10 +93,10 @@ export async function listarContasReceber() {
     .eq("user_id", user.id)
     .order("data_venda", { ascending: false })
 
-  return data ?? []
+  return (data ?? []) as ContaReceber[]
 }
 
-export async function baixarContaReceber(id: string, formaPagamento: string) {
+export async function baixarContaReceber(id: string, formaPagamento: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -121,12 +122,13 @@ export async function baixarContaReceber(id: string, formaPagamento: string) {
 
   if (error) return { error: error.message }
 
+  const c = conta as ContaReceber
   await supabase.from("tab_extrato_financeiro").insert({
-    tipo_movimentacao: "entrada",
+    tipo_movimentacao: "entrada" as const,
     forma_pagamento: formaPagamento as "dinheiro" | "pix" | "cartao" | "fiado",
-    valor: conta.valor_devido,
-    descricao: `Recebimento fiado - ${conta.cliente}`,
-    venda_id: conta.venda_id,
+    valor: c.valor_devido,
+    descricao: `Recebimento fiado - ${c.cliente}`,
+    venda_id: c.venda_id,
     user_id: user.id,
     data_hora: new Date().toISOString(),
   })
@@ -136,10 +138,10 @@ export async function baixarContaReceber(id: string, formaPagamento: string) {
   return { success: true }
 }
 
-export async function listarExtrato() {
+export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as ExtratoFinanceiro[]
 
   const hoje = new Date().toISOString().split("T")[0]
 
@@ -151,5 +153,5 @@ export async function listarExtrato() {
     .lte("data_hora", `${hoje}T23:59:59`)
     .order("data_hora", { ascending: false })
 
-  return data ?? []
+  return (data ?? []) as ExtratoFinanceiro[]
 }

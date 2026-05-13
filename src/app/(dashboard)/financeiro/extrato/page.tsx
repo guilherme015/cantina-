@@ -1,9 +1,9 @@
 import { Header } from "@/components/layout/header"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { TrendingUp, TrendingDown, DollarSign } from "lucide-react"
 import { formatCurrency, formatDateTime } from "@/lib/utils"
 import { listarExtrato } from "@/app/actions/financeiro"
+import type { ExtratoFinanceiro } from "@/types/database"
 
 const FORMA_LABEL: Record<string, string> = {
   dinheiro: "Dinheiro",
@@ -13,7 +13,7 @@ const FORMA_LABEL: Record<string, string> = {
 }
 
 export default async function ExtratoPage() {
-  const movimentacoes = await listarExtrato()
+  const movimentacoes: ExtratoFinanceiro[] = await listarExtrato()
 
   const entradas = movimentacoes.filter((m) => m.tipo_movimentacao === "entrada").reduce((s, m) => s + m.valor, 0)
   const saidas = movimentacoes.filter((m) => m.tipo_movimentacao === "saida").reduce((s, m) => s + m.valor, 0)

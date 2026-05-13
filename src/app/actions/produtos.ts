@@ -2,11 +2,12 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import type { Item } from "@/types/database"
 
-export async function listarProdutos() {
+export async function listarProdutos(): Promise<Item[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
+  if (!user) return [] as Item[]
 
   const { data, error } = await supabase
     .from("tab_itens")
@@ -14,11 +15,11 @@ export async function listarProdutos() {
     .eq("user_id", user.id)
     .order("nome")
 
-  if (error) return []
-  return data
+  if (error) return [] as Item[]
+  return (data ?? []) as Item[]
 }
 
-export async function criarProduto(formData: FormData) {
+export async function criarProduto(formData: FormData): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -42,7 +43,7 @@ export async function criarProduto(formData: FormData) {
   return { success: true }
 }
 
-export async function atualizarProduto(id: string, formData: FormData) {
+export async function atualizarProduto(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -65,7 +66,7 @@ export async function atualizarProduto(id: string, formData: FormData) {
   return { success: true }
 }
 
-export async function toggleProdutoAtivo(id: string, ativo: boolean) {
+export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -82,7 +83,7 @@ export async function toggleProdutoAtivo(id: string, ativo: boolean) {
   return { success: true }
 }
 
-export async function excluirProduto(id: string) {
+export async function excluirProduto(id: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
