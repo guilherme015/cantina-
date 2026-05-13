@@ -11,9 +11,11 @@ import {
   TrendingUp,
   Settings,
   UtensilsCrossed,
+  LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
+import { logout } from "@/app/actions/auth"
 
 const navItems = [
   {
@@ -107,8 +109,16 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      <div className="px-6 py-4 border-t border-[var(--border)]">
-        <p className="text-xs text-[var(--muted-foreground)]">Cantina+ v1.0</p>
+      <div className="px-3 py-4 border-t border-[var(--border)]">
+        <form action={logout}>
+          <button
+            type="submit"
+            className="flex items-center gap-3 w-full px-3 py-2.5 rounded-md text-sm font-medium text-[var(--secondary-foreground)] hover:bg-red-50 hover:text-red-600 transition-colors"
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            Sair
+          </button>
+        </form>
       </div>
     </aside>
   )
