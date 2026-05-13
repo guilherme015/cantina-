@@ -2,25 +2,60 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
-import type { FormaPagamento } from "@/types/database"
+import type { FormaPagamento, Item, Venda } from "@/types/database"
 
-export async function listarVendasHoje() {
+export type VendaItem = {
+  quantidade: number
+  valor_unitario: number
+  subtotal: number
+  tab_itens: { nome: string } | null
+}
+
+export type VendaComItens = Venda & { tab_vendas_itens: VendaItem[] }
+
+export async function listarVendasHoje(): Promise<VendaComItens[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
   const hoje = new Date().toISOString().split("T")[0]
 
-  const { data, error } = await supabase
+  const { data: vendas, error } = await supabase
     .from("tab_vendas")
-    .select("*, tab_vendas_itens(*, tab_itens(nome))")
+    .select("*")
     .eq("user_id", user.id)
     .gte("data_hora", `${hoje}T00:00:00`)
     .lte("data_hora", `${hoje}T23:59:59`)
     .order("data_hora", { ascending: false })
 
-  if (error) return []
-  return data
+  if (error || !vendas || vendas.length === 0) return []
+
+  const vendaIds = vendas.map((v) => v.id)
+
+  const { data: itens } = await supabase
+    .from("tab_vendas_itens")
+    .select("venda_id, quantidade, valor_unitario, subtotal, item_id")
+    .in("venda_id", vendaIds)
+
+  const itemIds = [...new Set((itens ?? []).map((i) => i.item_id))]
+
+  const { data: produtos } = itemIds.length > 0
+    ? await supabase.from("tab_itens").select("id, nome").in("id", itemIds)
+    : { data: [] }
+
+  const produtoMap = new Map((produtos ?? []).map((p) => [p.id, p.nome]))
+
+  return vendas.map((venda) => ({
+    ...venda,
+    tab_vendas_itens: (itens ?? [])
+      .filter((i) => i.item_id && i.venda_id === venda.id)
+      .map((i) => ({
+        quantidade: i.quantidade,
+        valor_unitario: i.valor_unitario,
+        subtotal: i.subtotal,
+        tab_itens: { nome: produtoMap.get(i.item_id) ?? "" },
+      })),
+  }))
 }
 
 export interface ItemVenda {
@@ -120,7 +155,7 @@ export async function cancelarVenda(id: string) {
   return { success: true }
 }
 
-export async function listarItensCardapioHoje() {
+export async function listarItensCardapioHoje(): Promise<Item[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
@@ -144,10 +179,19 @@ export async function listarItensCardapioHoje() {
     return todos ?? []
   }
 
-  const { data } = await supabase
+  const { data: relacoes } = await supabase
     .from("tab_cardapio_dia_itens")
-    .select("tab_itens(*)")
+    .select("item_id")
     .eq("cardapio_id", cardapio.id)
 
-  return data?.map((d) => d.tab_itens).filter(Boolean) ?? []
+  const ids = (relacoes ?? []).map((r) => r.item_id)
+  if (ids.length === 0) return []
+
+  const { data: produtos } = await supabase
+    .from("tab_itens")
+    .select("*")
+    .in("id", ids)
+    .order("nome")
+
+  return produtos ?? []
 }

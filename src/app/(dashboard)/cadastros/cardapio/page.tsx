@@ -9,15 +9,13 @@ export default async function CardapioPage() {
     getCardapioHoje(),
   ])
 
-  const idsHoje = cardapioHoje?.tab_cardapio_dia_itens?.map((i: any) => i.item_id) ?? []
-
   return (
     <div>
       <Header
         title="Cardápio do Dia"
         description="Defina quais produtos estarão disponíveis hoje"
       />
-      <CardapioClient produtos={produtos} idsHoje={idsHoje} />
+      <CardapioClient produtos={produtos} idsHoje={cardapioHoje?.item_ids ?? []} />
     </div>
   )
 }

@@ -14,7 +14,7 @@ export default async function VendasPage() {
         title="Vendas"
         description="Registre e acompanhe os pedidos do dia"
       />
-      <VendasClient vendas={vendas as any} itensDisponiveis={itensDisponiveis as any} />
+      <VendasClient vendas={vendas} itensDisponiveis={itensDisponiveis} />
     </div>
   )
 }

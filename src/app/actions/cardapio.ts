@@ -7,19 +7,36 @@ function hoje() {
   return new Date().toISOString().split("T")[0]
 }
 
-export async function getCardapioHoje() {
+export type CardapioHoje = {
+  id: string
+  data: string
+  item_ids: string[]
+}
+
+export async function getCardapioHoje(): Promise<CardapioHoje | null> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
   const { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
-    .select("*, tab_cardapio_dia_itens(item_id)")
+    .select("id, data")
     .eq("user_id", user.id)
     .eq("data", hoje())
     .single()
 
-  return cardapio
+  if (!cardapio) return null
+
+  const { data: relacoes } = await supabase
+    .from("tab_cardapio_dia_itens")
+    .select("item_id")
+    .eq("cardapio_id", cardapio.id)
+
+  return {
+    id: cardapio.id,
+    data: cardapio.data,
+    item_ids: (relacoes ?? []).map((r) => r.item_id),
+  }
 }
 
 export async function salvarCardapioHoje(itemIds: string[]) {

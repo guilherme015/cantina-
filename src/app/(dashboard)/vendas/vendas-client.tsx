@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -19,22 +19,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Plus, ShoppingCart, Minus, Trash2, X, CheckCircle
-} from "lucide-react"
+import { Plus, ShoppingCart, Minus, CheckCircle } from "lucide-react"
 import { formatCurrency, formatDateTime } from "@/lib/utils"
-import { criarVenda, cancelarVenda, type ItemVenda } from "@/app/actions/vendas"
+import { criarVenda, cancelarVenda } from "@/app/actions/vendas"
+import type { VendaComItens, ItemVenda } from "@/app/actions/vendas"
 import { toast } from "@/hooks/use-toast"
-import type { Item, Venda, FormaPagamento } from "@/types/database"
-
-type VendaComItens = Venda & {
-  tab_vendas_itens: Array<{
-    quantidade: number
-    valor_unitario: number
-    subtotal: number
-    tab_itens: { nome: string } | null
-  }>
-}
+import type { Item, FormaPagamento } from "@/types/database"
 
 interface Props {
   vendas: VendaComItens[]
@@ -54,13 +44,19 @@ const STATUS_LABEL: Record<string, string> = {
   cancelado: "Cancelado",
 }
 
-const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive"> = {
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "success" | "warning"
+const STATUS_VARIANT: Record<string, BadgeVariant> = {
   pago: "default",
-  pendente: "secondary",
+  pendente: "warning",
   cancelado: "destructive",
 }
 
-interface CarrinhoItem extends ItemVenda {}
+interface CarrinhoItem {
+  item_id: string
+  nome: string
+  quantidade: number
+  valor_unitario: number
+}
 
 export function VendasClient({ vendas, itensDisponiveis }: Props) {
   const [open, setOpen] = useState(false)
@@ -111,14 +107,15 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
       return
     }
 
-    startTransition(async () => {
-      const result = await criarVenda({
-        cliente,
-        forma_pagamento: formaPagamento,
-        desconto,
-        itens: carrinho,
-      })
+    const itens: ItemVenda[] = carrinho.map((c) => ({
+      item_id: c.item_id,
+      nome: c.nome,
+      quantidade: c.quantidade,
+      valor_unitario: c.valor_unitario,
+    }))
 
+    startTransition(async () => {
+      const result = await criarVenda({ cliente, forma_pagamento: formaPagamento, desconto, itens })
       if (result.error) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
       } else {
@@ -178,12 +175,12 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
                       <p className="font-semibold text-sm">
                         {v.cliente || "Venda avulsa"}
                       </p>
-                      <Badge variant={STATUS_VARIANT[v.status]}>
-                        {STATUS_LABEL[v.status]}
+                      <Badge variant={STATUS_VARIANT[v.status] ?? "secondary"}>
+                        {STATUS_LABEL[v.status] ?? v.status}
                       </Badge>
                     </div>
                     <p className="text-xs text-[var(--muted-foreground)] mb-2">
-                      {formatDateTime(v.data_hora)} · {FORMAS_PAGAMENTO.find(f => f.value === v.forma_pagamento)?.label}
+                      {formatDateTime(v.data_hora)} · {FORMAS_PAGAMENTO.find((f) => f.value === v.forma_pagamento)?.label}
                     </p>
                     <div className="text-xs text-[var(--muted-foreground)] space-y-0.5">
                       {v.tab_vendas_itens.map((item, i) => (
@@ -246,7 +243,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
             </div>
 
             <div>
-              <Label className="mb-2 block">Produtos do cardápio</Label>
+              <Label className="mb-2 block">Produtos</Label>
               {itensDisponiveis.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)] py-4 text-center">
                   Nenhum produto disponível. Configure o cardápio do dia primeiro.

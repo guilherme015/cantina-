@@ -145,7 +145,7 @@ export function ContasReceberClient({ contas }: Props) {
         </Card>
       )}
 
-      <Dialog open={!!baixando} onOpenChange={(o) => !o && setBaixando(null)}>
+      <Dialog open={!!baixando} onOpenChange={(o) => { if (!o) setBaixando(null) }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Registrar Recebimento</DialogTitle>
