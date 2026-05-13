@@ -12,9 +12,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Plus, ArrowUpCircle, CheckCircle } from "lucide-react"
+import { Plus, ArrowUpCircle, CheckCircle, Pencil, Trash2 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { criarContaPagar, pagarConta } from "@/app/actions/financeiro"
+import { criarContaPagar, pagarConta, editarContaPagar, excluirContaPagar } from "@/app/actions/financeiro"
 import { toast } from "@/hooks/use-toast"
 import type { ContaPagar } from "@/types/database"
 
@@ -24,6 +24,7 @@ interface Props {
 
 export function ContasPagarClient({ contas }: Props) {
   const [open, setOpen] = useState(false)
+  const [editando, setEditando] = useState<ContaPagar | null>(null)
   const [isPending, startTransition] = useTransition()
 
   const totalAberto = contas.filter((c) => !c.pago).reduce((s, c) => s + c.valor, 0)
@@ -42,6 +43,21 @@ export function ContasPagarClient({ contas }: Props) {
     })
   }
 
+  function handleEditar(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!editando) return
+    const formData = new FormData(e.currentTarget)
+    startTransition(async () => {
+      const result = await editarContaPagar(editando.id, formData)
+      if (result.error) {
+        toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else {
+        toast({ title: "Despesa atualizada!", variant: "success" })
+        setEditando(null)
+      }
+    })
+  }
+
   function handlePagar(id: string) {
     if (!confirm("Marcar como paga?")) return
     startTransition(async () => {
@@ -50,6 +66,18 @@ export function ContasPagarClient({ contas }: Props) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
       } else {
         toast({ title: "Conta marcada como paga!", variant: "success" })
+      }
+    })
+  }
+
+  function handleExcluir(id: string) {
+    if (!confirm("Excluir este lançamento?")) return
+    startTransition(async () => {
+      const result = await excluirContaPagar(id)
+      if (result.error) {
+        toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else {
+        toast({ title: "Lançamento excluído!", variant: "success" })
       }
     })
   }
@@ -91,8 +119,26 @@ export function ContasPagarClient({ contas }: Props) {
                         {formatDate(c.data)}{c.categoria ? ` · ${c.categoria}` : ""}
                       </p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <span className="font-semibold text-red-600">{formatCurrency(c.valor)}</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1"
+                        onClick={() => setEditando(c)}
+                        disabled={isPending}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-red-600 hover:text-red-700"
+                        onClick={() => handleExcluir(c.id)}
+                        disabled={isPending}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -123,9 +169,18 @@ export function ContasPagarClient({ contas }: Props) {
                       <p className="font-medium text-sm line-through">{c.descricao}</p>
                       <p className="text-xs text-[var(--muted-foreground)]">{formatDate(c.data)}</p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
                       <span className="font-semibold">{formatCurrency(c.valor)}</span>
                       <Badge variant="secondary">Paga</Badge>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1 text-red-600 hover:text-red-700"
+                        onClick={() => handleExcluir(c.id)}
+                        disabled={isPending}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -135,6 +190,7 @@ export function ContasPagarClient({ contas }: Props) {
         )}
       </div>
 
+      {/* Nova Despesa */}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -164,6 +220,41 @@ export function ContasPagarClient({ contas }: Props) {
               <Button type="submit" disabled={isPending}>{isPending ? "Salvando..." : "Salvar"}</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Editar Despesa */}
+      <Dialog open={!!editando} onOpenChange={(o) => { if (!o) setEditando(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Despesa</DialogTitle>
+          </DialogHeader>
+          {editando && (
+            <form onSubmit={handleEditar} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-descricao">Descrição *</Label>
+                <Input id="edit-descricao" name="descricao" defaultValue={editando.descricao} required />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-valor">Valor (R$) *</Label>
+                  <Input id="edit-valor" name="valor" type="number" step="0.01" min="0.01" defaultValue={editando.valor} required />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-data">Data *</Label>
+                  <Input id="edit-data" name="data" type="date" defaultValue={editando.data} required />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-categoria">Categoria</Label>
+                <Input id="edit-categoria" name="categoria" defaultValue={editando.categoria ?? ""} placeholder="Ex: Ingredientes, Aluguel..." />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <Button type="button" variant="outline" onClick={() => setEditando(null)}>Cancelar</Button>
+                <Button type="submit" disabled={isPending}>{isPending ? "Salvando..." : "Salvar"}</Button>
+              </div>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
     </>
