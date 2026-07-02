@@ -8,8 +8,8 @@ export default function DashboardLayout({
   return (
     <div className="min-h-screen bg-[var(--background)]">
       <Sidebar />
-      <main className="ml-[240px] min-h-screen">
-        <div className="p-6 max-w-6xl mx-auto">
+      <main className="lg:ml-[240px] min-h-screen max-lg:pt-14">
+        <div className="p-4 sm:p-6 max-w-6xl mx-auto">
           {children}
         </div>
       </main>

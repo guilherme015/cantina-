@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { mensagemDeErro } from "@/lib/erros"
 
 function hoje() {
   return new Date().toISOString().split("T")[0]
@@ -60,7 +61,7 @@ export async function salvarCardapioHoje(itemIds: string[]) {
       .select("id")
       .single()
 
-    if (errCriacao) return { error: errCriacao.message }
+    if (errCriacao) return { error: mensagemDeErro(errCriacao) }
     cardapio = novo
   }
 
@@ -72,7 +73,7 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   if (itemIds.length > 0) {
     const rows = itemIds.map((item_id) => ({ cardapio_id: cardapio!.id, item_id }))
     const { error } = await supabase.from("tab_cardapio_dia_itens").insert(rows)
-    if (error) return { error: error.message }
+    if (error) return { error: mensagemDeErro(error) }
   }
 
   revalidatePath("/cadastros/cardapio")

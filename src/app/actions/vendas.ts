@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { mensagemDeErro } from "@/lib/erros"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -77,7 +78,10 @@ export async function criarVenda(dados: {
 
   if (dados.itens.length === 0) return { error: "Adicione ao menos um item" }
 
-  const total = dados.itens.reduce((sum, i) => sum + i.quantidade * i.valor_unitario, 0) - dados.desconto
+  // O desconto nunca pode superar o subtotal — mesma regra exibida na UI.
+  const subtotal = dados.itens.reduce((sum, i) => sum + i.quantidade * i.valor_unitario, 0)
+  const desconto = Math.min(Math.max(0, dados.desconto), subtotal)
+  const total = subtotal - desconto
 
   const status = dados.forma_pagamento === "fiado" ? "pendente" : "pago"
 
@@ -86,7 +90,7 @@ export async function criarVenda(dados: {
     .insert({
       cliente: dados.cliente || null,
       forma_pagamento: dados.forma_pagamento,
-      desconto: dados.desconto,
+      desconto,
       total,
       status,
       user_id: user.id,
@@ -95,7 +99,7 @@ export async function criarVenda(dados: {
     .select("id")
     .single()
 
-  if (errVenda) return { error: errVenda.message }
+  if (errVenda) return { error: mensagemDeErro(errVenda) }
 
   const itensRows = dados.itens.map((i) => ({
     venda_id: venda.id,
@@ -106,7 +110,7 @@ export async function criarVenda(dados: {
   }))
 
   const { error: errItens } = await supabase.from("tab_vendas_itens").insert(itensRows)
-  if (errItens) return { error: errItens.message }
+  if (errItens) return { error: mensagemDeErro(errItens) }
 
   const descricao = dados.cliente
     ? `Venda para ${dados.cliente}`
@@ -144,14 +148,56 @@ export async function cancelarVenda(id: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const { data: venda } = await supabase
+    .from("tab_vendas")
+    .select("id, status, forma_pagamento")
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .single()
+
+  if (!venda) return { error: "Venda não encontrada" }
+  if (venda.status === "cancelado") return { error: "Esta venda já foi cancelada" }
+
+  // Fiado já recebido não pode ser cancelado sem antes estornar o recebimento.
+  if (venda.forma_pagamento === "fiado") {
+    const { data: contaPaga } = await supabase
+      .from("tab_contas_receber")
+      .select("id")
+      .eq("venda_id", id)
+      .eq("user_id", user.id)
+      .eq("pago", true)
+      .limit(1)
+
+    if (contaPaga && contaPaga.length > 0) {
+      return { error: "O fiado desta venda já foi recebido. Não é possível cancelar." }
+    }
+  }
+
   const { error } = await supabase
     .from("tab_vendas")
     .update({ status: "cancelado" })
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
+
+  // Estorna os lançamentos financeiros ligados à venda.
+  await supabase
+    .from("tab_extrato_financeiro")
+    .delete()
+    .eq("venda_id", id)
+    .eq("user_id", user.id)
+
+  await supabase
+    .from("tab_contas_receber")
+    .delete()
+    .eq("venda_id", id)
+    .eq("user_id", user.id)
+    .eq("pago", false)
+
   revalidatePath("/vendas")
+  revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/contas-receber")
   return { success: true }
 }
 

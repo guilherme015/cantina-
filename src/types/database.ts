@@ -35,6 +35,7 @@ export interface Database {
           imagem_url?: string | null
           ativo?: boolean
         }
+        Relationships: []
       }
       tab_cardapio_dia: {
         Row: {
@@ -56,6 +57,7 @@ export interface Database {
           data?: string
           observacoes?: string | null
         }
+        Relationships: []
       }
       tab_cardapio_dia_itens: {
         Row: {
@@ -68,7 +70,27 @@ export interface Database {
           cardapio_id: string
           item_id: string
         }
-        Update: never
+        Update: {
+          id?: string
+          cardapio_id?: string
+          item_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tab_cardapio_dia_itens_cardapio_id_fkey"
+            columns: ["cardapio_id"]
+            isOneToOne: false
+            referencedRelation: "tab_cardapio_dia"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tab_cardapio_dia_itens_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "tab_itens"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tab_vendas: {
         Row: {
@@ -103,6 +125,7 @@ export interface Database {
           forma_pagamento?: "dinheiro" | "pix" | "cartao" | "fiado"
           status?: "pendente" | "pago" | "cancelado"
         }
+        Relationships: []
       }
       tab_vendas_itens: {
         Row: {
@@ -121,7 +144,28 @@ export interface Database {
           valor_unitario: number
           subtotal: number
         }
-        Update: never
+        Update: {
+          id?: string
+          quantidade?: number
+          valor_unitario?: number
+          subtotal?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tab_vendas_itens_item_id_fkey"
+            columns: ["item_id"]
+            isOneToOne: false
+            referencedRelation: "tab_itens"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tab_vendas_itens_venda_id_fkey"
+            columns: ["venda_id"]
+            isOneToOne: false
+            referencedRelation: "tab_vendas"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tab_extrato_financeiro: {
         Row: {
@@ -153,6 +197,15 @@ export interface Database {
           valor?: number
           descricao?: string
         }
+        Relationships: [
+          {
+            foreignKeyName: "tab_extrato_financeiro_venda_id_fkey"
+            columns: ["venda_id"]
+            isOneToOne: false
+            referencedRelation: "tab_vendas"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tab_contas_receber: {
         Row: {
@@ -187,6 +240,15 @@ export interface Database {
           data_baixa?: string | null
           forma_pagamento_baixa?: string | null
         }
+        Relationships: [
+          {
+            foreignKeyName: "tab_contas_receber_venda_id_fkey"
+            columns: ["venda_id"]
+            isOneToOne: false
+            referencedRelation: "tab_vendas"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tab_contas_pagar: {
         Row: {
@@ -217,7 +279,20 @@ export interface Database {
           pago?: boolean
           categoria?: string | null
         }
+        Relationships: []
       }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
     }
   }
 }

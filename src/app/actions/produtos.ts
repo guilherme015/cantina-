@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { mensagemDeErro } from "@/lib/erros"
 import type { Item } from "@/types/database"
 
 export async function listarProdutos(): Promise<Item[]> {
@@ -38,7 +39,7 @@ export async function criarProduto(formData: FormData): Promise<{ error?: string
     user_id: user.id,
   })
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
   revalidatePath("/cadastros/produtos")
   return { success: true }
 }
@@ -61,7 +62,7 @@ export async function atualizarProduto(id: string, formData: FormData): Promise<
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
   revalidatePath("/cadastros/produtos")
   return { success: true }
 }
@@ -77,7 +78,7 @@ export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ 
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
   revalidatePath("/cadastros/produtos")
   revalidatePath("/cadastros/cardapio")
   return { success: true }
@@ -94,7 +95,7 @@ export async function excluirProduto(id: string): Promise<{ error?: string; succ
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
   revalidatePath("/cadastros/produtos")
   return { success: true }
 }
