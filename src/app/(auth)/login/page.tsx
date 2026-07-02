@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { login, signup } from "@/app/actions/auth"
 import { UtensilsCrossed } from "lucide-react"
 
@@ -8,6 +9,10 @@ interface LoginPageProps {
 const errorMessages: Record<string, string> = {
   credenciais_invalidas: "E-mail ou senha incorretos. Tente novamente.",
   erro_cadastro: "Erro ao criar conta. Tente com outro e-mail.",
+  email_ja_cadastrado:
+    "Este e-mail já possui uma conta. Faça login acima ou use “Esqueceu a senha?” para recuperá-la.",
+  senha_fraca: "A senha é muito fraca. Use pelo menos 6 caracteres.",
+  link_invalido: "O link de recuperação é inválido ou expirou. Solicite um novo.",
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
@@ -82,6 +87,15 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             >
               Entrar
             </button>
+
+            <div className="text-right">
+              <Link
+                href="/recuperar-senha"
+                className="text-sm text-[var(--primary)] hover:underline"
+              >
+                Esqueceu a senha?
+              </Link>
+            </div>
           </form>
 
           <div className="relative my-5">
