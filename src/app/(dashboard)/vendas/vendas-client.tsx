@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Plus, ShoppingCart, Minus, CheckCircle } from "lucide-react"
-import { formatCurrency, formatDateTime } from "@/lib/utils"
+import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { criarVenda, cancelarVenda } from "@/app/actions/vendas"
 import type { VendaComItens, ItemVenda } from "@/app/actions/vendas"
 import { toast } from "@/hooks/use-toast"
@@ -191,7 +191,14 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="font-bold text-[var(--primary)]">{formatCurrency(v.total)}</p>
+                    <p className={cn(
+                      "font-bold",
+                      v.status === "cancelado"
+                        ? "text-[var(--muted-foreground)] line-through"
+                        : "text-[var(--primary)]"
+                    )}>
+                      {formatCurrency(v.total)}
+                    </p>
                     {v.status !== "cancelado" && (
                       <Button
                         size="sm"

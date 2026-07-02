@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
+import { mensagemDeErro } from "@/lib/erros"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
 export async function listarContasPagar(): Promise<ContaPagar[]> {
@@ -41,7 +42,7 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
     user_id: user.id,
   })
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
   revalidatePath("/financeiro/contas-pagar")
   return { success: true }
 }
@@ -66,7 +67,7 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
 
   await supabase.from("tab_extrato_financeiro").insert({
     tipo_movimentacao: "saida" as const,
@@ -109,6 +110,22 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
     .single()
 
   if (!conta) return { error: "Conta não encontrada" }
+  if ((conta as ContaReceber).pago) return { error: "Esta conta já foi recebida" }
+
+  // Bloqueia recebimento de fiado cuja venda de origem foi cancelada.
+  const vendaId = (conta as ContaReceber).venda_id
+  if (vendaId) {
+    const { data: venda } = await supabase
+      .from("tab_vendas")
+      .select("status")
+      .eq("id", vendaId)
+      .eq("user_id", user.id)
+      .single()
+
+    if (venda?.status === "cancelado") {
+      return { error: "A venda desta conta foi cancelada. Não é possível receber." }
+    }
+  }
 
   const { error } = await supabase
     .from("tab_contas_receber")
@@ -120,7 +137,7 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
     .eq("id", id)
     .eq("user_id", user.id)
 
-  if (error) return { error: error.message }
+  if (error) return { error: mensagemDeErro(error) }
 
   const c = conta as ContaReceber
   await supabase.from("tab_extrato_financeiro").insert({

@@ -1,6 +1,5 @@
 import { Header } from "@/components/layout/header"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
 import { Settings } from "lucide-react"
 
 export default function ConfiguracoesPage() {
