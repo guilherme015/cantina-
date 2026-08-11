@@ -4,6 +4,8 @@ import { useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
@@ -17,9 +19,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { ArrowDownCircle, CheckCircle } from "lucide-react"
+import { ArrowDownCircle, CheckCircle, Pencil, Trash2 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { baixarContaReceber } from "@/app/actions/financeiro"
+import { baixarContaReceber, editarContaReceber, excluirContaReceber } from "@/app/actions/financeiro"
 import { toast } from "@/hooks/use-toast"
 import type { ContaReceber } from "@/types/database"
 
@@ -29,6 +31,7 @@ interface Props {
 
 export function ContasReceberClient({ contas }: Props) {
   const [baixando, setBaixando] = useState<ContaReceber | null>(null)
+  const [editando, setEditando] = useState<ContaReceber | null>(null)
   const [formaPagamento, setFormaPagamento] = useState("dinheiro")
   const [isPending, startTransition] = useTransition()
 
@@ -47,6 +50,39 @@ export function ContasReceberClient({ contas }: Props) {
       } else {
         toast({ title: "Recebimento registrado!", variant: "success" })
         setBaixando(null)
+      }
+    })
+  }
+
+  function handleEditar(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!editando) return
+    const fd = new FormData(e.currentTarget)
+    const dados = {
+      cliente: fd.get("cliente") as string,
+      valor_devido: parseFloat(fd.get("valor_devido") as string),
+      data_venda: fd.get("data_venda") as string,
+      descricao: (fd.get("descricao") as string) || undefined,
+    }
+    startTransition(async () => {
+      const result = await editarContaReceber(editando.id, dados)
+      if (result.error) {
+        toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else {
+        toast({ title: "Lançamento atualizado!", variant: "success" })
+        setEditando(null)
+      }
+    })
+  }
+
+  function handleExcluir(id: string) {
+    if (!confirm("Excluir este lançamento?")) return
+    startTransition(async () => {
+      const result = await excluirContaReceber(id)
+      if (result.error) {
+        toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else {
+        toast({ title: "Lançamento excluído!", variant: "success" })
       }
     })
   }
@@ -103,8 +139,25 @@ export function ContasReceberClient({ contas }: Props) {
                       {formatDate(c.data_venda)}{c.descricao ? ` · ${c.descricao}` : ""}
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <span className="font-semibold text-orange-600">{formatCurrency(c.valor_devido)}</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditando(c)}
+                      disabled={isPending}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700"
+                      onClick={() => handleExcluir(c.id)}
+                      disabled={isPending}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
@@ -134,9 +187,18 @@ export function ContasReceberClient({ contas }: Props) {
                     <p className="font-medium text-sm line-through">{c.cliente}</p>
                     <p className="text-xs text-[var(--muted-foreground)]">{formatDate(c.data_venda)}</p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <span className="font-semibold">{formatCurrency(c.valor_devido)}</span>
                     <Badge variant="secondary">Recebido</Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700"
+                      onClick={() => handleExcluir(c.id)}
+                      disabled={isPending}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -145,6 +207,7 @@ export function ContasReceberClient({ contas }: Props) {
         </Card>
       )}
 
+      {/* Registrar Recebimento */}
       <Dialog open={!!baixando} onOpenChange={(o) => { if (!o) setBaixando(null) }}>
         <DialogContent>
           <DialogHeader>
@@ -176,6 +239,41 @@ export function ContasReceberClient({ contas }: Props) {
                 </Button>
               </div>
             </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Editar lançamento */}
+      <Dialog open={!!editando} onOpenChange={(o) => { if (!o) setEditando(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Lançamento</DialogTitle>
+          </DialogHeader>
+          {editando && (
+            <form onSubmit={handleEditar} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-cliente">Cliente *</Label>
+                <Input id="edit-cliente" name="cliente" defaultValue={editando.cliente} required />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-valor">Valor (R$) *</Label>
+                  <Input id="edit-valor" name="valor_devido" type="number" step="0.01" min="0.01" defaultValue={editando.valor_devido} required />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-data">Data *</Label>
+                  <Input id="edit-data" name="data_venda" type="date" defaultValue={editando.data_venda} required />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-descricao">Descrição</Label>
+                <Input id="edit-descricao" name="descricao" defaultValue={editando.descricao ?? ""} placeholder="Descrição opcional" />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <Button type="button" variant="outline" onClick={() => setEditando(null)}>Cancelar</Button>
+                <Button type="submit" disabled={isPending}>{isPending ? "Salvando..." : "Salvar"}</Button>
+              </div>
+            </form>
           )}
         </DialogContent>
       </Dialog>

@@ -4,17 +4,13 @@ import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 
-function hoje() {
-  return new Date().toISOString().split("T")[0]
-}
-
 export type CardapioHoje = {
   id: string
   data: string
   item_ids: string[]
 }
 
-export async function getCardapioHoje(): Promise<CardapioHoje | null> {
+export async function getCardapioPorData(data: string): Promise<CardapioHoje | null> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
@@ -23,7 +19,7 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
     .from("tab_cardapio_dia")
     .select("id, data")
     .eq("user_id", user.id)
-    .eq("data", hoje())
+    .eq("data", data)
     .single()
 
   if (!cardapio) return null
@@ -40,12 +36,10 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
   }
 }
 
-export async function salvarCardapioHoje(itemIds: string[]) {
+export async function salvarCardapio(data: string, itemIds: string[]) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
-
-  const data = hoje()
 
   let { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
@@ -79,4 +73,15 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   revalidatePath("/cadastros/cardapio")
   revalidatePath("/vendas")
   return { success: true }
+}
+
+// Keep backward-compat alias used by vendas or other callers
+export async function getCardapioHoje() {
+  const hoje = new Date().toISOString().split("T")[0]
+  return getCardapioPorData(hoje)
+}
+
+export async function salvarCardapioHoje(itemIds: string[]) {
+  const hoje = new Date().toISOString().split("T")[0]
+  return salvarCardapio(hoje, itemIds)
 }

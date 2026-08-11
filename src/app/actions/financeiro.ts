@@ -47,6 +47,47 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
   return { success: true }
 }
 
+export async function editarContaPagar(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const descricao = formData.get("descricao") as string
+  const valor = parseFloat(formData.get("valor") as string)
+  const data = formData.get("data") as string
+  const categoria = formData.get("categoria") as string
+
+  if (!descricao || isNaN(valor) || valor <= 0 || !data) {
+    return { error: "Preencha todos os campos obrigatórios" }
+  }
+
+  const { error } = await supabase
+    .from("tab_contas_pagar")
+    .update({ descricao, valor, data, categoria: categoria || null })
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
+  revalidatePath("/financeiro/contas-pagar")
+  return { success: true }
+}
+
+export async function excluirContaPagar(id: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { error } = await supabase
+    .from("tab_contas_pagar")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
+  revalidatePath("/financeiro/contas-pagar")
+  return { success: true }
+}
+
 export async function pagarConta(id: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -151,6 +192,70 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
   })
 
   revalidatePath("/financeiro/contas-receber")
+  revalidatePath("/financeiro/extrato")
+  return { success: true }
+}
+
+export async function editarContaReceber(id: string, dados: { cliente: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { error } = await supabase
+    .from("tab_contas_receber")
+    .update({ cliente: dados.cliente, valor_devido: dados.valor_devido, data_venda: dados.data_venda, descricao: dados.descricao ?? null })
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
+  revalidatePath("/financeiro/contas-receber")
+  return { success: true }
+}
+
+export async function excluirContaReceber(id: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { error } = await supabase
+    .from("tab_contas_receber")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
+  revalidatePath("/financeiro/contas-receber")
+  return { success: true }
+}
+
+export async function editarExtrato(id: string, dados: { descricao: string; valor: number; tipo_movimentacao: "entrada" | "saida"; forma_pagamento: "dinheiro" | "pix" | "cartao" | "fiado" }): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { error } = await supabase
+    .from("tab_extrato_financeiro")
+    .update(dados)
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
+  revalidatePath("/financeiro/extrato")
+  return { success: true }
+}
+
+export async function excluirExtrato(id: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { error } = await supabase
+    .from("tab_extrato_financeiro")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+
+  if (error) return { error: error.message }
   revalidatePath("/financeiro/extrato")
   return { success: true }
 }
