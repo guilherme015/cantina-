@@ -22,6 +22,16 @@ Backlog vive em GitHub Issues (`guilherme015/cantina-`), não em checklist de RE
 - Schema do banco é só `supabase/schema.sql` — não há pasta de migrations. Mudança de schema = editar esse arquivo e aplicar manualmente no SQL Editor do Supabase.
 - Componentes de UI em `src/components/ui` seguem padrão shadcn/ui sobre Radix — reaproveite antes de criar um novo.
 
+## Revisores automáticos
+
+Um hook Stop (`.claude/hooks/check-reviewers.sh`) checa o diff não commitado a cada turno e bloqueia o fim do turno se:
+- Tocou Vendas/Fiado/Contas a Pagar/Contas a Receber/Extrato sem o subagente `financeiro-reviewer` ter revisado o diff atual
+- Tocou `supabase/schema.sql` ou rotas/actions de auth sem o `supabase-security-reviewer` ter revisado
+
+O rastreio é por hash do diff (marker em `/tmp/claude-cantina-hooks/`), não por commit — só cobre mudanças ainda não commitadas. Depois de commitar, quem pega o que passou é a revisão de PR.
+
+Use o `e2e-smoke-tester` manualmente antes de qualquer PR ir pra merge (não é hookável por path, então não é automático).
+
 ## Armadilha conhecida
 
 `next.config.ts` já teve `typescript.ignoreBuildErrors` e `eslint.ignoreDuringBuilds` setados como `true` (commit `bb2b0b7`) e foi revertido em seguida (`6b5fd7e`) porque escondia erros reais. **Nunca reative essas flags** — `npm run build` só é um check confiável enquanto elas ficarem `false`/ausentes.

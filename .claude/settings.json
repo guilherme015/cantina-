@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-reviewers.sh",
+            "timeout": 15,
+            "statusMessage": "Checando se diff financeiro/auth precisa de revisão..."
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Agent(subagent_type:financeiro-reviewer)",
+      "Agent(subagent_type:supabase-security-reviewer)",
+      "Agent(subagent_type:e2e-smoke-tester)",
+      "Bash(git diff *)",
+      "Bash(git status *)",
+      "Bash(mkdir -p /tmp/claude-cantina-hooks*)",
+      "Bash(sha256sum *)"
+    ]
+  }
+}
