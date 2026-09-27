@@ -45,4 +45,5 @@ Acesse [http://localhost:3000](http://localhost:3000).
 - [x] **Fase 6** — Fiado / Contas a Receber
 - [x] **Fase 7** — Contas a Pagar
 - [x] **Fase 8** — Extrato financeiro
-- [ ] **Fase 9** — Fechamento do dia
+
+O backlog a partir daqui é rastreado via [Issues do GitHub](https://github.com/guilherme015/cantina-/issues), não mais neste checklist.
