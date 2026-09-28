@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { hojeBR, limitesDiaBR } from "@/lib/data-br"
+import { getIgrejaIdAtual } from "@/lib/igreja"
 import type { FechamentoCaixa } from "@/types/database"
 
 export interface ResumoDia {
@@ -23,7 +24,7 @@ function arredondar(valor: number): number {
 
 async function calcularResumo(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
+  igrejaId: string,
   data: string
 ): Promise<Omit<ResumoDia, "jaFechado"> | { error: string }> {
   const { inicio, fimExclusivo } = limitesDiaBR(data)
@@ -31,7 +32,7 @@ async function calcularResumo(
   const { data: linhas, error, count } = await supabase
     .from("tab_extrato_financeiro")
     .select("tipo_movimentacao, forma_pagamento, valor", { count: "exact" })
-    .eq("user_id", userId)
+    .eq("igreja_id", igrejaId)
     .gte("data_hora", inicio)
     .lt("data_hora", fimExclusivo)
     .limit(5000)
@@ -75,11 +76,14 @@ export async function resumoDoDia(data?: string): Promise<ResumoDia | { error: s
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const dia = data ?? hojeBR()
-  const resumo = await calcularResumo(supabase, user.id, dia)
+  const resumo = await calcularResumo(supabase, igrejaId, dia)
   if ("error" in resumo) return resumo
 
-  const jaFechado = await diaFechado(supabase, user.id, dia)
+  const jaFechado = await diaFechado(supabase, igrejaId, dia)
 
   return { ...resumo, jaFechado }
 }
@@ -89,10 +93,13 @@ export async function listarFechamentos(): Promise<FechamentoCaixa[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return []
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return []
+
   const { data } = await supabase
     .from("tab_fechamento_caixa")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .order("data", { ascending: false })
 
   return (data ?? []) as FechamentoCaixa[]
@@ -116,37 +123,24 @@ export async function fecharCaixa(dados: {
     return { error: "Preencha todos os campos obrigatórios" }
   }
 
-  if (dados.data > hojeBR()) {
-    return { error: "Não é possível fechar um dia no futuro." }
-  }
-
-  if (await diaFechado(supabase, user.id, dados.data)) {
-    return { error: "Este dia já foi fechado." }
-  }
-
-  const resumo = await calcularResumo(supabase, user.id, dados.data)
-  if ("error" in resumo) return resumo
-
-  const saldoInicial = arredondar(dados.saldoInicial)
-  const valorInformado = arredondar(dados.valorInformado)
-  const valorCalculado = arredondar(saldoInicial + resumo.entradasDinheiro - resumo.totalSaidas)
-  const diferenca = arredondar(valorInformado - valorCalculado)
-
-  const { error } = await supabase.from("tab_fechamento_caixa").insert({
-    data: dados.data,
-    saldo_inicial: saldoInicial,
-    entradas_dinheiro: resumo.entradasDinheiro,
-    entradas_pix: resumo.entradasPix,
-    entradas_cartao: resumo.entradasCartao,
-    total_saidas: resumo.totalSaidas,
-    valor_calculado: valorCalculado,
-    valor_informado: valorInformado,
-    diferenca,
-    observacoes: dados.observacoes || null,
-    user_id: user.id,
+  // O cálculo do resumo e o insert do fechamento acontecem atomicamente na
+  // RPC fechar_caixa (lock por igreja+dia no banco) — calcular aqui em JS e
+  // inserir depois deixava uma janela real entre as duas idas ao banco onde
+  // uma venda podia entrar sem ser contada, e não tinha como desfazer o
+  // fechamento depois (não existe policy de DELETE em tab_fechamento_caixa).
+  const { error } = await supabase.rpc("fechar_caixa", {
+    p_data: dados.data,
+    p_saldo_inicial: arredondar(dados.saldoInicial),
+    p_valor_informado: arredondar(dados.valorInformado),
+    p_observacoes: dados.observacoes || null,
   })
 
-  if (error) return { error: mensagemDeErro(error) }
+  if (error) {
+    // RAISE EXCEPTION na RPC vem com code P0001 e mensagem já em português,
+    // pensada pro usuário final — não passa por mensagemDeErro().
+    if (error.code === "P0001") return { error: error.message }
+    return { error: mensagemDeErro(error) }
+  }
 
   revalidatePath("/financeiro/fechamento")
   return { success: true }

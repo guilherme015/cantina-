@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
+import { getIgrejaIdAtual } from "@/lib/igreja"
 
 function hoje() {
   return new Date().toISOString().split("T")[0]
@@ -19,10 +20,13 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return null
+
   const { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
     .select("id, data")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("data", hoje())
     .single()
 
@@ -45,19 +49,22 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const data = hoje()
 
   let { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
     .select("id")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("data", data)
     .single()
 
   if (!cardapio) {
     const { data: novo, error: errCriacao } = await supabase
       .from("tab_cardapio_dia")
-      .insert({ data, user_id: user.id })
+      .insert({ data, user_id: user.id, igreja_id: igrejaId })
       .select("id")
       .single()
 

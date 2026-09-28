@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { hojeBR, limitesDiaBR } from "@/lib/data-br"
+import { getIgrejaIdAtual } from "@/lib/igreja"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
 export async function listarContasPagar(): Promise<ContaPagar[]> {
@@ -12,10 +13,13 @@ export async function listarContasPagar(): Promise<ContaPagar[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as ContaPagar[]
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return [] as ContaPagar[]
+
   const { data } = await supabase
     .from("tab_contas_pagar")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .order("data", { ascending: false })
 
   return (data ?? []) as ContaPagar[]
@@ -25,6 +29,9 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
+
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const descricao = formData.get("descricao") as string
   const valor = parseFloat(formData.get("valor") as string)
@@ -42,6 +49,7 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
     categoria: categoria || null,
     pago: false,
     user_id: user.id,
+    igreja_id: igrejaId,
   })
 
   if (error) return { error: mensagemDeErro(error) }
@@ -53,6 +61,9 @@ export async function editarContaPagar(id: string, formData: FormData): Promise<
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
+
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const descricao = formData.get("descricao") as string
   const valor = parseFloat(formData.get("valor") as string)
@@ -67,7 +78,7 @@ export async function editarContaPagar(id: string, formData: FormData): Promise<
     .from("tab_contas_pagar")
     .update({ descricao, valor, data, categoria: categoria || null })
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("pago", false)
     .select("id")
 
@@ -84,11 +95,14 @@ export async function excluirContaPagar(id: string): Promise<{ error?: string; s
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const { data: linhas, error } = await supabase
     .from("tab_contas_pagar")
     .delete()
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("pago", false)
     .select("id")
 
@@ -105,35 +119,57 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const { data: conta } = await supabase
     .from("tab_contas_pagar")
     .select("*")
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .single()
 
   if (!conta) return { error: "Conta não encontrada" }
+  if ((conta as ContaPagar).pago) return { error: "Esta conta já foi paga" }
 
-  if (await diaFechado(supabase, user.id, hojeBR())) {
+  if (await diaFechado(supabase, igrejaId, hojeBR())) {
     return { error: "O caixa de hoje já foi fechado. Não é possível registrar pagamentos." }
   }
 
-  const { error } = await supabase
+  // .eq("pago", false) torna esse update atômico: com mais de um membro na
+  // mesma igreja, só quem realmente vira false->true grava a saída no
+  // extrato — sem isso, dois cliques quase simultâneos lançam a mesma
+  // despesa duas vezes.
+  const { data: linhas, error } = await supabase
     .from("tab_contas_pagar")
     .update({ pago: true })
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
+    .eq("pago", false)
+    .select("id")
 
   if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Esta conta já foi paga" }
+  }
 
-  await supabase.from("tab_extrato_financeiro").insert({
+  const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
     tipo_movimentacao: "saida" as const,
     forma_pagamento: "dinheiro" as const,
     valor: (conta as ContaPagar).valor,
     descricao: (conta as ContaPagar).descricao,
     user_id: user.id,
+    igreja_id: igrejaId,
     data_hora: new Date().toISOString(),
   })
+
+  if (errExtrato) {
+    // O caixa pode ter sido fechado por outro membro entre o UPDATE acima e
+    // este insert (o trigger de banco rejeita o lançamento nesse caso) —
+    // desfaz a baixa em vez de deixar a conta paga sem entrada no extrato.
+    await supabase.from("tab_contas_pagar").update({ pago: false }).eq("id", id).eq("igreja_id", igrejaId)
+    return { error: "O caixa foi fechado enquanto o pagamento era confirmado. Tente novamente." }
+  }
 
   revalidatePath("/financeiro/contas-pagar")
   revalidatePath("/financeiro/extrato")
@@ -146,10 +182,13 @@ export async function listarContasReceber(): Promise<ContaReceber[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as ContaReceber[]
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return [] as ContaReceber[]
+
   const { data } = await supabase
     .from("tab_contas_receber")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .order("data_venda", { ascending: false })
 
   return (data ?? []) as ContaReceber[]
@@ -159,6 +198,9 @@ export async function editarContaReceber(id: string, dados: { cliente: string; v
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
+
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   if (!dados.cliente || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
     return { error: "Preencha todos os campos obrigatórios" }
@@ -173,7 +215,7 @@ export async function editarContaReceber(id: string, dados: { cliente: string; v
       descricao: dados.descricao ?? null,
     })
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("pago", false)
     .select("id")
 
@@ -190,11 +232,14 @@ export async function excluirContaReceber(id: string): Promise<{ error?: string;
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const { data: linhas, error } = await supabase
     .from("tab_contas_receber")
     .delete()
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("pago", false)
     .select("id")
 
@@ -211,11 +256,14 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const { data: conta } = await supabase
     .from("tab_contas_receber")
     .select("*")
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .single()
 
   if (!conta) return { error: "Conta não encontrada" }
@@ -228,7 +276,7 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
       .from("tab_vendas")
       .select("status")
       .eq("id", vendaId)
-      .eq("user_id", user.id)
+      .eq("igreja_id", igrejaId)
       .single()
 
     if (venda?.status === "cancelado") {
@@ -236,11 +284,14 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
     }
   }
 
-  if (await diaFechado(supabase, user.id, hojeBR())) {
+  if (await diaFechado(supabase, igrejaId, hojeBR())) {
     return { error: "O caixa de hoje já foi fechado. Não é possível registrar recebimentos." }
   }
 
-  const { error } = await supabase
+  // .eq("pago", false) torna esse update atômico — mesma razão do
+  // pagarConta: com mais de um membro na mesma igreja, dois recebimentos
+  // quase simultâneos do mesmo fiado não podem gerar duas entradas.
+  const { data: linhas, error } = await supabase
     .from("tab_contas_receber")
     .update({
       pago: true,
@@ -248,20 +299,38 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
       forma_pagamento_baixa: formaPagamento,
     })
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
+    .eq("pago", false)
+    .select("id")
 
   if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Esta conta já foi recebida" }
+  }
 
   const c = conta as ContaReceber
-  await supabase.from("tab_extrato_financeiro").insert({
+  const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
     tipo_movimentacao: "entrada" as const,
     forma_pagamento: formaPagamento as "dinheiro" | "pix" | "cartao" | "fiado",
     valor: c.valor_devido,
     descricao: `Recebimento fiado - ${c.cliente}`,
     venda_id: c.venda_id,
     user_id: user.id,
+    igreja_id: igrejaId,
     data_hora: new Date().toISOString(),
   })
+
+  if (errExtrato) {
+    // Mesmo caso do pagarConta: o caixa pode ter sido fechado por outro
+    // membro entre o UPDATE acima e este insert — desfaz a baixa em vez de
+    // deixar a conta recebida sem entrada no extrato.
+    await supabase
+      .from("tab_contas_receber")
+      .update({ pago: false, data_baixa: null, forma_pagamento_baixa: null })
+      .eq("id", id)
+      .eq("igreja_id", igrejaId)
+    return { error: "O caixa foi fechado enquanto o recebimento era confirmado. Tente novamente." }
+  }
 
   revalidatePath("/financeiro/contas-receber")
   revalidatePath("/financeiro/extrato")
@@ -274,16 +343,18 @@ export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as ExtratoFinanceiro[]
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return [] as ExtratoFinanceiro[]
+
   const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
   const { data } = await supabase
     .from("tab_extrato_financeiro")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .gte("data_hora", inicio)
     .lt("data_hora", fimExclusivo)
     .order("data_hora", { ascending: false })
 
   return (data ?? []) as ExtratoFinanceiro[]
 }
-
