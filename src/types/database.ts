@@ -9,6 +9,54 @@ export type Json =
 export interface Database {
   public: {
     Tables: {
+      igrejas: {
+        Row: {
+          id: string
+          created_at: string
+          nome: string
+          owner_user_id: string
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          nome: string
+          owner_user_id: string
+        }
+        Update: {
+          id?: string
+          nome?: string
+        }
+        Relationships: []
+      }
+      igreja_membros: {
+        Row: {
+          id: string
+          created_at: string
+          igreja_id: string
+          user_id: string
+          papel: "owner" | "membro"
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          igreja_id: string
+          user_id: string
+          papel?: "owner" | "membro"
+        }
+        Update: {
+          id?: string
+          papel?: "owner" | "membro"
+        }
+        Relationships: [
+          {
+            foreignKeyName: "igreja_membros_igreja_id_fkey"
+            columns: ["igreja_id"]
+            isOneToOne: false
+            referencedRelation: "igrejas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tab_itens: {
         Row: {
           id: string
@@ -18,6 +66,7 @@ export interface Database {
           imagem_url: string | null
           ativo: boolean
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -27,6 +76,7 @@ export interface Database {
           imagem_url?: string | null
           ativo?: boolean
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -44,6 +94,7 @@ export interface Database {
           data: string
           observacoes: string | null
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -51,6 +102,7 @@ export interface Database {
           data: string
           observacoes?: string | null
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -104,6 +156,7 @@ export interface Database {
           forma_pagamento: "dinheiro" | "pix" | "cartao" | "fiado"
           status: "pendente" | "pago" | "cancelado"
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -116,6 +169,7 @@ export interface Database {
           forma_pagamento: "dinheiro" | "pix" | "cartao" | "fiado"
           status?: "pendente" | "pago" | "cancelado"
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -178,6 +232,7 @@ export interface Database {
           descricao: string
           venda_id: string | null
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -189,6 +244,7 @@ export interface Database {
           descricao: string
           venda_id?: string | null
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -220,6 +276,7 @@ export interface Database {
           forma_pagamento_baixa: string | null
           venda_id: string | null
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -233,6 +290,7 @@ export interface Database {
           forma_pagamento_baixa?: string | null
           venda_id?: string | null
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -264,6 +322,7 @@ export interface Database {
           pago: boolean
           categoria: string | null
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -274,6 +333,7 @@ export interface Database {
           pago?: boolean
           categoria?: string | null
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -300,6 +360,7 @@ export interface Database {
           diferenca: number
           observacoes: string | null
           user_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
@@ -315,6 +376,7 @@ export interface Database {
           diferenca: number
           observacoes?: string | null
           user_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -336,7 +398,15 @@ export interface Database {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      fechar_caixa: {
+        Args: {
+          p_data: string
+          p_saldo_inicial: number
+          p_valor_informado: number
+          p_observacoes?: string | null
+        }
+        Returns: Database["public"]["Tables"]["tab_fechamento_caixa"]["Row"]
+      }
     }
     Enums: {
       [_ in never]: never
@@ -347,6 +417,8 @@ export interface Database {
   }
 }
 
+export type Igreja = Database["public"]["Tables"]["igrejas"]["Row"]
+export type IgrejaMembro = Database["public"]["Tables"]["igreja_membros"]["Row"]
 export type Item = Database["public"]["Tables"]["tab_itens"]["Row"]
 export type CardapioDia = Database["public"]["Tables"]["tab_cardapio_dia"]["Row"]
 export type Venda = Database["public"]["Tables"]["tab_vendas"]["Row"]

@@ -13,6 +13,7 @@ const errorMessages: Record<string, string> = {
     "Este e-mail já possui uma conta. Faça login acima ou use “Esqueceu a senha?” para recuperá-la.",
   senha_fraca: "A senha é muito fraca. Use pelo menos 6 caracteres.",
   link_invalido: "O link de recuperação é inválido ou expirou. Solicite um novo.",
+  nome_igreja_obrigatorio: "Informe o nome da sua igreja para criar a conta.",
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
@@ -111,6 +112,14 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           {/* Formulário de Cadastro */}
           <form action={signup} className="space-y-4">
+            <input
+              name="nomeIgreja"
+              type="text"
+              required
+              autoComplete="organization"
+              placeholder="Nome da sua igreja"
+              className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+            />
             <input
               name="email"
               type="email"

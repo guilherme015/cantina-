@@ -24,8 +24,22 @@ export async function signup(formData: FormData) {
 
   const email = formData.get("email") as string
   const password = formData.get("password") as string
+  const nomeIgreja = (formData.get("nomeIgreja") as string)?.trim()
 
-  const { error } = await supabase.auth.signUp({ email, password })
+  if (!nomeIgreja) {
+    redirect("/login?error=nome_igreja_obrigatorio")
+  }
+
+  // A criação da igreja e do vínculo de owner acontece num trigger no banco
+  // (trg_criar_igreja_no_cadastro, disparado por AFTER INSERT ON auth.users),
+  // atômico com a criação do usuário — não dá pra fazer isso aqui na
+  // server action porque o client não tem mais permissão de INSERT em
+  // igrejas/igreja_membros (ver supabase/schema.sql).
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { nome_igreja: nomeIgreja } },
+  })
 
   if (error) {
     if (error.code === "user_already_exists") {

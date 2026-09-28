@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
+import { getIgrejaIdAtual } from "@/lib/igreja"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -21,12 +22,15 @@ export async function listarVendasHoje(): Promise<VendaComItens[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as VendaComItens[]
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return [] as VendaComItens[]
+
   const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
   const { data: vendas, error } = await supabase
     .from("tab_vendas")
     .select("*")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .gte("data_hora", inicio)
     .lt("data_hora", fimExclusivo)
     .order("data_hora", { ascending: false })
@@ -78,9 +82,12 @@ export async function criarVenda(dados: {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   if (dados.itens.length === 0) return { error: "Adicione ao menos um item" }
 
-  if (await diaFechado(supabase, user.id, hojeBR())) {
+  if (await diaFechado(supabase, igrejaId, hojeBR())) {
     return { error: "O caixa de hoje já foi fechado. Não é possível registrar novas vendas." }
   }
 
@@ -100,6 +107,7 @@ export async function criarVenda(dados: {
       total,
       status,
       user_id: user.id,
+      igreja_id: igrejaId,
       data_hora: new Date().toISOString(),
     })
     .select("id")
@@ -123,15 +131,26 @@ export async function criarVenda(dados: {
     : `Venda ${venda.id.slice(0, 8)}`
 
   if (dados.forma_pagamento !== "fiado") {
-    await supabase.from("tab_extrato_financeiro").insert({
+    const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
       tipo_movimentacao: "entrada",
       forma_pagamento: dados.forma_pagamento,
       valor: total,
       descricao,
       venda_id: venda.id,
       user_id: user.id,
+      igreja_id: igrejaId,
       data_hora: new Date().toISOString(),
     })
+
+    if (errExtrato) {
+      // O caixa pode ter sido fechado por outro membro entre a checagem de
+      // diaFechado no início desta função e este insert (o trigger de banco
+      // rejeita o lançamento nesse caso) — desfaz a venda em vez de deixar
+      // um pedido "pago" sem entrada no extrato.
+      await supabase.from("tab_vendas_itens").delete().eq("venda_id", venda.id)
+      await supabase.from("tab_vendas").delete().eq("id", venda.id).eq("igreja_id", igrejaId)
+      return { error: "O caixa foi fechado enquanto a venda era confirmada. Tente novamente." }
+    }
   } else {
     await supabase.from("tab_contas_receber").insert({
       cliente: dados.cliente || "Cliente",
@@ -140,6 +159,7 @@ export async function criarVenda(dados: {
       descricao,
       venda_id: venda.id,
       user_id: user.id,
+      igreja_id: igrejaId,
     })
   }
 
@@ -155,11 +175,14 @@ export async function cancelarVenda(id: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
   const { data: venda } = await supabase
     .from("tab_vendas")
     .select("id, status, forma_pagamento, data_hora")
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .single()
 
   if (!venda) return { error: "Venda não encontrada" }
@@ -173,7 +196,7 @@ export async function cancelarVenda(id: string) {
       .from("tab_contas_receber")
       .select("id")
       .eq("venda_id", id)
-      .eq("user_id", user.id)
+      .eq("igreja_id", igrejaId)
       .eq("pago", true)
       .limit(1)
 
@@ -188,12 +211,12 @@ export async function cancelarVenda(id: string) {
       .from("tab_extrato_financeiro")
       .select("data_hora")
       .eq("venda_id", id)
-      .eq("user_id", user.id)
+      .eq("igreja_id", igrejaId)
       .limit(1)
       .maybeSingle()
 
     const dataDoLancamento = entrada ? dataBR(entrada.data_hora) : dataBR(venda.data_hora)
-    if (await diaFechado(supabase, user.id, dataDoLancamento)) {
+    if (await diaFechado(supabase, igrejaId, dataDoLancamento)) {
       return { error: "O caixa deste dia já foi fechado. Não é possível cancelar esta venda." }
     }
   }
@@ -202,22 +225,31 @@ export async function cancelarVenda(id: string) {
     .from("tab_vendas")
     .update({ status: "cancelado" })
     .eq("id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
 
   if (error) return { error: mensagemDeErro(error) }
 
   // Estorna os lançamentos financeiros ligados à venda.
-  await supabase
+  const { error: errExtrato } = await supabase
     .from("tab_extrato_financeiro")
     .delete()
     .eq("venda_id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
+
+  if (errExtrato) {
+    // O caixa pode ter sido fechado por outro membro entre a checagem de
+    // diaFechado acima e este delete (o trigger de banco também protege
+    // DELETE) — desfaz o cancelamento em vez de deixar a venda cancelada
+    // com o lançamento intacto no extrato.
+    await supabase.from("tab_vendas").update({ status: venda.status }).eq("id", id).eq("igreja_id", igrejaId)
+    return { error: "O caixa foi fechado enquanto a venda era cancelada. Tente novamente." }
+  }
 
   await supabase
     .from("tab_contas_receber")
     .delete()
     .eq("venda_id", id)
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("pago", false)
 
   revalidatePath("/vendas")
@@ -232,12 +264,15 @@ export async function listarItensCardapioHoje(): Promise<Item[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as Item[]
 
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return [] as Item[]
+
   const hoje = new Date().toISOString().split("T")[0]
 
   const { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
     .select("id")
-    .eq("user_id", user.id)
+    .eq("igreja_id", igrejaId)
     .eq("data", hoje)
     .single()
 
@@ -245,7 +280,7 @@ export async function listarItensCardapioHoje(): Promise<Item[]> {
     const { data: todos } = await supabase
       .from("tab_itens")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("igreja_id", igrejaId)
       .eq("ativo", true)
       .order("nome")
     return todos ?? []
