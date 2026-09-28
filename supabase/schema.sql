@@ -88,13 +88,20 @@ CREATE TABLE IF NOT EXISTS tab_vendas (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
-  numero_pedido SERIAL,
+  -- Não é mais SERIAL: uma sequência global compartilhada entre todas as
+  -- igrejas do banco deixava o "número do pedido" revelar o volume de
+  -- vendas de OUTRAS igrejas (ex.: igreja A vê seus pedidos saltarem de
+  -- #40 pra #97, e sabe que outras igrejas venderam ~57 nesse meio tempo).
+  -- O valor é atribuído pelo trigger trg_numerar_venda_por_igreja (mais
+  -- abaixo), que numera cada igreja a partir de 1, na sua própria sequência.
+  numero_pedido INTEGER NOT NULL,
   cliente TEXT,
   data_hora TIMESTAMPTZ DEFAULT NOW(),
   total NUMERIC(10, 2) NOT NULL CHECK (total >= 0),
   desconto NUMERIC(10, 2) DEFAULT 0 CHECK (desconto >= 0),
   forma_pagamento TEXT NOT NULL CHECK (forma_pagamento IN ('dinheiro', 'pix', 'cartao', 'fiado')),
-  status TEXT DEFAULT 'pago' CHECK (status IN ('pendente', 'pago', 'cancelado'))
+  status TEXT DEFAULT 'pago' CHECK (status IN ('pendente', 'pago', 'cancelado')),
+  UNIQUE (igreja_id, numero_pedido)
 );
 
 -- ============================================================
@@ -307,6 +314,42 @@ CREATE POLICY "membros_igreja_contas_pagar" ON tab_contas_pagar
 -- realidade.
 CREATE POLICY "membros_igreja_fechamento_select" ON tab_fechamento_caixa
   FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+
+-- ============================================================
+-- TRIGGER: numerar venda por igreja
+--
+-- numero_pedido não tem mais DEFAULT (era SERIAL, uma sequência global
+-- compartilhada entre igrejas — ver comentário na definição de
+-- tab_vendas). Este trigger atribui o próximo número dentro da própria
+-- igreja. Não é SECURITY DEFINER: a leitura do MAX já respeita a RLS
+-- normal (só vê vendas da própria igreja), e se alguém tentar inserir
+-- com igreja_id de outra igreja, a policy de INSERT de tab_vendas
+-- rejeita o INSERT inteiro mais adiante, então o número calculado aqui
+-- nunca chega a ser usado.
+--
+-- Corrida possível: duas vendas na mesma igreja no mesmíssimo instante
+-- podem calcular o mesmo próximo número; o UNIQUE(igreja_id,
+-- numero_pedido) da tabela rejeita a segunda com um erro comum de
+-- constraint (sem lock dedicado — é raro demais numa cantina pequena
+-- pra justificar o custo de travar toda venda) e criarVenda já aborta
+-- direto se o insert em tab_vendas falhar.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.numerar_venda_por_igreja()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  SELECT COALESCE(MAX(numero_pedido), 0) + 1 INTO NEW.numero_pedido
+  FROM public.tab_vendas
+  WHERE igreja_id = NEW.igreja_id;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_numerar_venda_por_igreja
+  BEFORE INSERT ON tab_vendas
+  FOR EACH ROW EXECUTE FUNCTION public.numerar_venda_por_igreja();
 
 -- ============================================================
 -- TRIGGER: criar igreja + vínculo de owner no cadastro
