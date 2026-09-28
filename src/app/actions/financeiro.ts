@@ -148,6 +148,57 @@ export async function listarContasReceber(): Promise<ContaReceber[]> {
   return (data ?? []) as ContaReceber[]
 }
 
+export async function editarContaReceber(id: string, dados: { cliente: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  if (!dados.cliente || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
+    return { error: "Preencha todos os campos obrigatórios" }
+  }
+
+  const { data: linhas, error } = await supabase
+    .from("tab_contas_receber")
+    .update({
+      cliente: dados.cliente,
+      valor_devido: dados.valor_devido,
+      data_venda: dados.data_venda,
+      descricao: dados.descricao ?? null,
+    })
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .eq("pago", false)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Conta não encontrada ou já recebida. Não é possível editar." }
+  }
+  revalidatePath("/financeiro/contas-receber")
+  return { success: true }
+}
+
+export async function excluirContaReceber(id: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { data: linhas, error } = await supabase
+    .from("tab_contas_receber")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .eq("pago", false)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Conta não encontrada ou já recebida. Não é possível excluir." }
+  }
+  revalidatePath("/financeiro/contas-receber")
+  return { success: true }
+}
+
 export async function baixarContaReceber(id: string, formaPagamento: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -223,3 +274,4 @@ export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
 
   return (data ?? []) as ExtratoFinanceiro[]
 }
+

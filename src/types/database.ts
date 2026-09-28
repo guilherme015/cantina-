@@ -236,6 +236,10 @@ export interface Database {
         }
         Update: {
           id?: string
+          cliente?: string
+          valor_devido?: number
+          data_venda?: string
+          descricao?: string | null
           pago?: boolean
           data_baixa?: string | null
           forma_pagamento_baixa?: string | null
