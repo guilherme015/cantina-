@@ -10,6 +10,7 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   TrendingUp,
+  Lock,
   Settings,
   UtensilsCrossed,
   LogOut,
@@ -58,6 +59,11 @@ const navItems = [
     label: "Contas a Pagar",
     href: "/financeiro/contas-pagar",
     icon: ArrowUpCircle,
+  },
+  {
+    label: "Fechamento do Dia",
+    href: "/financeiro/fechamento",
+    icon: Lock,
   },
   {
     label: "Separador",

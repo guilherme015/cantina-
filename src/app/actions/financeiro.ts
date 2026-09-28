@@ -3,6 +3,8 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
+import { diaFechado } from "@/lib/fechamento"
+import { hojeBR, limitesDiaBR } from "@/lib/data-br"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
 export async function listarContasPagar(): Promise<ContaPagar[]> {
@@ -112,6 +114,10 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
 
   if (!conta) return { error: "Conta não encontrada" }
 
+  if (await diaFechado(supabase, user.id, hojeBR())) {
+    return { error: "O caixa de hoje já foi fechado. Não é possível registrar pagamentos." }
+  }
+
   const { error } = await supabase
     .from("tab_contas_pagar")
     .update({ pago: true })
@@ -131,6 +137,7 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
 
   revalidatePath("/financeiro/contas-pagar")
   revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/fechamento")
   return { success: true }
 }
 
@@ -229,11 +236,15 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
     }
   }
 
+  if (await diaFechado(supabase, user.id, hojeBR())) {
+    return { error: "O caixa de hoje já foi fechado. Não é possível registrar recebimentos." }
+  }
+
   const { error } = await supabase
     .from("tab_contas_receber")
     .update({
       pago: true,
-      data_baixa: new Date().toISOString().split("T")[0],
+      data_baixa: hojeBR(),
       forma_pagamento_baixa: formaPagamento,
     })
     .eq("id", id)
@@ -254,6 +265,7 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
 
   revalidatePath("/financeiro/contas-receber")
   revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/fechamento")
   return { success: true }
 }
 
@@ -262,14 +274,14 @@ export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as ExtratoFinanceiro[]
 
-  const hoje = new Date().toISOString().split("T")[0]
+  const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
   const { data } = await supabase
     .from("tab_extrato_financeiro")
     .select("*")
     .eq("user_id", user.id)
-    .gte("data_hora", `${hoje}T00:00:00`)
-    .lte("data_hora", `${hoje}T23:59:59`)
+    .gte("data_hora", inicio)
+    .lt("data_hora", fimExclusivo)
     .order("data_hora", { ascending: false })
 
   return (data ?? []) as ExtratoFinanceiro[]

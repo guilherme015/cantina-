@@ -13,6 +13,10 @@ export function formatCurrency(value: number): string {
 }
 
 export function formatDate(date: string | Date): string {
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [ano, mes, dia] = date.split("-").map(Number)
+    return new Intl.DateTimeFormat("pt-BR").format(new Date(ano, mes - 1, dia))
+  }
   return new Intl.DateTimeFormat("pt-BR").format(new Date(date))
 }
 

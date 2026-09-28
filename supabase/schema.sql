@@ -116,6 +116,26 @@ CREATE TABLE IF NOT EXISTS tab_contas_pagar (
 );
 
 -- ============================================================
+-- TABELA: tab_fechamento_caixa (Fechamento do Dia)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tab_fechamento_caixa (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  data DATE NOT NULL,
+  saldo_inicial NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (saldo_inicial >= 0),
+  entradas_dinheiro NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (entradas_dinheiro >= 0),
+  entradas_pix NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (entradas_pix >= 0),
+  entradas_cartao NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (entradas_cartao >= 0),
+  total_saidas NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (total_saidas >= 0),
+  valor_calculado NUMERIC(10, 2) NOT NULL,
+  valor_informado NUMERIC(10, 2) NOT NULL CHECK (valor_informado >= 0),
+  diferenca NUMERIC(10, 2) NOT NULL,
+  observacoes TEXT,
+  UNIQUE (user_id, data)
+);
+
+-- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- Garante que cada usuário só vê seus próprios dados
 -- ============================================================
@@ -128,6 +148,7 @@ ALTER TABLE tab_vendas_itens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_extrato_financeiro ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_contas_receber ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_contas_pagar ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tab_fechamento_caixa ENABLE ROW LEVEL SECURITY;
 
 -- Políticas para tab_itens
 CREATE POLICY "usuarios_proprios_itens" ON tab_itens
@@ -171,6 +192,13 @@ CREATE POLICY "usuarios_proprias_contas_receber" ON tab_contas_receber
 CREATE POLICY "usuarios_proprias_contas_pagar" ON tab_contas_pagar
   FOR ALL USING (auth.uid() = user_id);
 
+-- Políticas para tab_fechamento_caixa (sem UPDATE/DELETE: um fechamento é
+-- imutável depois de criado, é isso que trava o dia nas outras tabelas)
+CREATE POLICY "usuarios_proprios_fechamento_select" ON tab_fechamento_caixa
+  FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "usuarios_proprios_fechamento_insert" ON tab_fechamento_caixa
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
 -- ============================================================
 -- ÍNDICES para performance
 -- ============================================================
@@ -182,3 +210,4 @@ CREATE INDEX IF NOT EXISTS idx_tab_extrato_user_id ON tab_extrato_financeiro(use
 CREATE INDEX IF NOT EXISTS idx_tab_contas_receber_user_id ON tab_contas_receber(user_id);
 CREATE INDEX IF NOT EXISTS idx_tab_contas_receber_pago ON tab_contas_receber(pago);
 CREATE INDEX IF NOT EXISTS idx_tab_contas_pagar_user_id ON tab_contas_pagar(user_id);
+CREATE INDEX IF NOT EXISTS idx_tab_fechamento_user_data ON tab_fechamento_caixa(user_id, data);

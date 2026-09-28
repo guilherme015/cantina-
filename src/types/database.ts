@@ -285,6 +285,52 @@ export interface Database {
         }
         Relationships: []
       }
+      tab_fechamento_caixa: {
+        Row: {
+          id: string
+          created_at: string
+          data: string
+          saldo_inicial: number
+          entradas_dinheiro: number
+          entradas_pix: number
+          entradas_cartao: number
+          total_saidas: number
+          valor_calculado: number
+          valor_informado: number
+          diferenca: number
+          observacoes: string | null
+          user_id: string
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          data: string
+          saldo_inicial?: number
+          entradas_dinheiro?: number
+          entradas_pix?: number
+          entradas_cartao?: number
+          total_saidas?: number
+          valor_calculado: number
+          valor_informado: number
+          diferenca: number
+          observacoes?: string | null
+          user_id: string
+        }
+        Update: {
+          id?: string
+          data?: string
+          saldo_inicial?: number
+          entradas_dinheiro?: number
+          entradas_pix?: number
+          entradas_cartao?: number
+          total_saidas?: number
+          valor_calculado?: number
+          valor_informado?: number
+          diferenca?: number
+          observacoes?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -306,6 +352,7 @@ export type CardapioDia = Database["public"]["Tables"]["tab_cardapio_dia"]["Row"
 export type Venda = Database["public"]["Tables"]["tab_vendas"]["Row"]
 export type VendaItem = Database["public"]["Tables"]["tab_vendas_itens"]["Row"]
 export type ExtratoFinanceiro = Database["public"]["Tables"]["tab_extrato_financeiro"]["Row"]
+export type FechamentoCaixa = Database["public"]["Tables"]["tab_fechamento_caixa"]["Row"]
 export type ContaReceber = Database["public"]["Tables"]["tab_contas_receber"]["Row"]
 export type ContaPagar = Database["public"]["Tables"]["tab_contas_pagar"]["Row"]
 

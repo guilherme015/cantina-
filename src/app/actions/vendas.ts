@@ -3,6 +3,8 @@
 import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
+import { diaFechado } from "@/lib/fechamento"
+import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -19,14 +21,14 @@ export async function listarVendasHoje(): Promise<VendaComItens[]> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return [] as VendaComItens[]
 
-  const hoje = new Date().toISOString().split("T")[0]
+  const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
   const { data: vendas, error } = await supabase
     .from("tab_vendas")
     .select("*")
     .eq("user_id", user.id)
-    .gte("data_hora", `${hoje}T00:00:00`)
-    .lte("data_hora", `${hoje}T23:59:59`)
+    .gte("data_hora", inicio)
+    .lt("data_hora", fimExclusivo)
     .order("data_hora", { ascending: false })
 
   if (error || !vendas || vendas.length === 0) return []
@@ -77,6 +79,10 @@ export async function criarVenda(dados: {
   if (!user) return { error: "Não autenticado" }
 
   if (dados.itens.length === 0) return { error: "Adicione ao menos um item" }
+
+  if (await diaFechado(supabase, user.id, hojeBR())) {
+    return { error: "O caixa de hoje já foi fechado. Não é possível registrar novas vendas." }
+  }
 
   // O desconto nunca pode superar o subtotal — mesma regra exibida na UI.
   const subtotal = dados.itens.reduce((sum, i) => sum + i.quantidade * i.valor_unitario, 0)
@@ -130,7 +136,7 @@ export async function criarVenda(dados: {
     await supabase.from("tab_contas_receber").insert({
       cliente: dados.cliente || "Cliente",
       valor_devido: total,
-      data_venda: new Date().toISOString().split("T")[0],
+      data_venda: hojeBR(),
       descricao,
       venda_id: venda.id,
       user_id: user.id,
@@ -139,6 +145,7 @@ export async function criarVenda(dados: {
 
   revalidatePath("/vendas")
   revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/fechamento")
   revalidatePath("/financeiro/contas-receber")
   return { success: true }
 }
@@ -150,7 +157,7 @@ export async function cancelarVenda(id: string) {
 
   const { data: venda } = await supabase
     .from("tab_vendas")
-    .select("id, status, forma_pagamento")
+    .select("id, status, forma_pagamento, data_hora")
     .eq("id", id)
     .eq("user_id", user.id)
     .single()
@@ -158,9 +165,11 @@ export async function cancelarVenda(id: string) {
   if (!venda) return { error: "Venda não encontrada" }
   if (venda.status === "cancelado") return { error: "Esta venda já foi cancelada" }
 
-  // Fiado já recebido não pode ser cancelado sem antes estornar o recebimento.
   if (venda.forma_pagamento === "fiado") {
-    const { data: contaPaga } = await supabase
+    // Fiado ainda não recebido não tem nenhum lançamento de caixa (nem no
+    // extrato, nem uma conta a receber paga) — não há o que a trava de dia
+    // fechado precise proteger aqui. Só bloqueamos se já foi recebido.
+    const { data: contaPaga, error: errContaPaga } = await supabase
       .from("tab_contas_receber")
       .select("id")
       .eq("venda_id", id)
@@ -168,8 +177,24 @@ export async function cancelarVenda(id: string) {
       .eq("pago", true)
       .limit(1)
 
-    if (contaPaga && contaPaga.length > 0) {
+    if (errContaPaga) return { error: mensagemDeErro(errContaPaga) }
+    if (contaPaga.length > 0) {
       return { error: "O fiado desta venda já foi recebido. Não é possível cancelar." }
+    }
+  } else {
+    // Venda não-fiado sempre tem um lançamento de entrada no extrato — checa
+    // a data desse lançamento (não a da venda) antes de apagá-lo.
+    const { data: entrada } = await supabase
+      .from("tab_extrato_financeiro")
+      .select("data_hora")
+      .eq("venda_id", id)
+      .eq("user_id", user.id)
+      .limit(1)
+      .maybeSingle()
+
+    const dataDoLancamento = entrada ? dataBR(entrada.data_hora) : dataBR(venda.data_hora)
+    if (await diaFechado(supabase, user.id, dataDoLancamento)) {
+      return { error: "O caixa deste dia já foi fechado. Não é possível cancelar esta venda." }
     }
   }
 
@@ -197,6 +222,7 @@ export async function cancelarVenda(id: string) {
 
   revalidatePath("/vendas")
   revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/fechamento")
   revalidatePath("/financeiro/contas-receber")
   return { success: true }
 }
