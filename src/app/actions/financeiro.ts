@@ -47,6 +47,57 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
   return { success: true }
 }
 
+export async function editarContaPagar(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const descricao = formData.get("descricao") as string
+  const valor = parseFloat(formData.get("valor") as string)
+  const data = formData.get("data") as string
+  const categoria = formData.get("categoria") as string
+
+  if (!descricao || isNaN(valor) || valor <= 0 || !data) {
+    return { error: "Preencha todos os campos obrigatórios" }
+  }
+
+  const { data: linhas, error } = await supabase
+    .from("tab_contas_pagar")
+    .update({ descricao, valor, data, categoria: categoria || null })
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .eq("pago", false)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Conta não encontrada ou já paga. Não é possível editar." }
+  }
+  revalidatePath("/financeiro/contas-pagar")
+  return { success: true }
+}
+
+export async function excluirContaPagar(id: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const { data: linhas, error } = await supabase
+    .from("tab_contas_pagar")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .eq("pago", false)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhas || linhas.length === 0) {
+    return { error: "Conta não encontrada ou já paga. Não é possível excluir." }
+  }
+  revalidatePath("/financeiro/contas-pagar")
+  return { success: true }
+}
+
 export async function pagarConta(id: string): Promise<{ error?: string; success?: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
