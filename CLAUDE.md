@@ -19,8 +19,21 @@ Backlog vive em GitHub Issues (`guilherme015/cantina-`), não em checklist de RE
 
 - Rotas em `src/app/(auth)` e `src/app/(dashboard)` (route groups)
 - Server actions por domínio em `src/app/actions/*.ts` (ex.: `vendas.ts`, `financeiro.ts`, `cardapio.ts`)
-- Schema do banco é só `supabase/schema.sql` — não há pasta de migrations. Mudança de schema = editar esse arquivo e aplicar manualmente no SQL Editor do Supabase.
+- Schema do banco é só `supabase/schema.sql` — não há pasta de migrations. Mudança de schema = editar esse arquivo e aplicar manualmente no SQL Editor do Supabase. Exceção: `supabase/migration-multi-igreja.sql` é um script ALTER-based único, pra atualizar um projeto Supabase que já tinha o schema antigo (sem `igreja_id`) — ver seção abaixo.
 - Componentes de UI em `src/components/ui` seguem padrão shadcn/ui sobre Radix — reaproveite antes de criar um novo.
+
+## Multi-igreja (tenant)
+
+Isolamento de dados é por igreja (`igreja_id`), não por usuário (`user_id`) — um usuário pertence a exatamente 1 igreja (`igreja_membros`, `UNIQUE(user_id)`, sem convite de membro ainda), e vários usuários da mesma igreja compartilham os mesmos dados. Decisão de produto: o Cantina+ vai virar módulo de um SaaS multi-igreja maior (histórico completo na issue #18).
+
+- RLS usa `private.minhas_igrejas()` (função `SECURITY DEFINER`, schema `private` não exposto pelo PostgREST) em vez de repetir a subquery em `igreja_membros` diretamente numa policy — isso causa `infinite recursion detected in policy` (42P17) no Postgres.
+- Cadastro cria a igreja + vínculo de owner via trigger `AFTER INSERT ON auth.users` (`criar_igreja_no_cadastro`), não na server action de signup — RLS travaria o INSERT antes do vínculo existir (ovo e galinha), e se a confirmação de e-mail estiver ligada no projeto, `auth.uid()` fica nulo depois do `signUp()`.
+- Fechamento de caixa é a RPC `fechar_caixa` (`SECURITY DEFINER`; não existe policy de INSERT client-side em `tab_fechamento_caixa` — a RPC é o único caminho de escrita), com `pg_advisory_xact_lock` por `(igreja, dia)` (`private.chave_lock_fechamento`) pra fechar a corrida entre uma venda sendo confirmada e o cálculo do resumo. Um trigger em `tab_extrato_financeiro` usa o mesmo lock (modo compartilhado) pra rejeitar INSERT/UPDATE/DELETE de um dia já fechado.
+- `numero_pedido` em `tab_vendas` é numerado por igreja via trigger (`numerar_venda_por_igreja`), não por uma sequência global — evita revelar volume de vendas de outras igrejas.
+- Toda função `SECURITY DEFINER` usa `SET search_path = ''` com nomes totalmente qualificados (`public.tabela`) — sem isso, uma tabela temporária com o mesmo nome de uma tabela real sequestra o INSERT/SELECT (mesma classe do CVE-2018-1058).
+- Server actions resolvem a igreja do usuário logado via `getIgrejaIdAtual()` (`src/lib/igreja.ts`) e filtram por `igreja_id` — `user_id` nas tabelas de negócio continua existindo só como registro de "quem fez", não é mais usado para isolamento.
+- **Passo manual pendente:** aplicar `supabase/migration-multi-igreja.sql` no SQL Editor do projeto Supabase real — ver checklist na issue #19. Sem isso o app não funciona em produção (código já espera `igreja_id`).
+- Backlog conhecido, documentado e não bloqueante: reabrir um fechamento de caixa (#20); hardening de baixo risco aceito por ora — `user_id` forjável no `WITH CHECK` das tabelas de negócio e FKs de tabelas filhas sem `igreja_id` (#21).
 
 ## Revisores automáticos
 

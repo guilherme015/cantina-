@@ -73,6 +73,16 @@ ALTER TABLE tab_fechamento_caixa DROP CONSTRAINT IF EXISTS tab_fechamento_caixa_
 ALTER TABLE tab_fechamento_caixa ADD CONSTRAINT tab_fechamento_caixa_igreja_id_data_key UNIQUE (igreja_id, data);
 
 -- ============================================================
+-- 3b. numero_pedido deixa de ser uma sequência global (SERIAL)
+--     compartilhada entre igrejas — ver comentário completo em
+--     schema.sql (revela volume de vendas de outras igrejas). Passa a
+--     ser numerado por igreja via trigger (item 8 mais abaixo).
+-- ============================================================
+ALTER TABLE tab_vendas ALTER COLUMN numero_pedido DROP DEFAULT;
+ALTER TABLE tab_vendas ADD CONSTRAINT tab_vendas_igreja_id_numero_pedido_key UNIQUE (igreja_id, numero_pedido);
+DROP SEQUENCE IF EXISTS tab_vendas_numero_pedido_seq;
+
+-- ============================================================
 -- 4. Função private.minhas_igrejas() — ver comentário em schema.sql.
 --    SECURITY DEFINER é obrigatório: uma policy de igreja_membros que
 --    faz subquery direto na própria tabela causa "infinite recursion
@@ -177,6 +187,29 @@ DROP POLICY IF EXISTS "usuarios_proprios_fechamento_insert" ON tab_fechamento_ca
 DROP POLICY IF EXISTS "membros_igreja_fechamento_insert" ON tab_fechamento_caixa;
 CREATE POLICY "membros_igreja_fechamento_select" ON tab_fechamento_caixa
   FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+
+-- ============================================================
+-- 5b. Trigger: numerar venda por igreja (ver comentário completo em
+--     schema.sql — não é SECURITY DEFINER, corrida rara resolvida pelo
+--     UNIQUE(igreja_id, numero_pedido) do item 3b)
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.numerar_venda_por_igreja()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  SELECT COALESCE(MAX(numero_pedido), 0) + 1 INTO NEW.numero_pedido
+  FROM public.tab_vendas
+  WHERE igreja_id = NEW.igreja_id;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_numerar_venda_por_igreja ON tab_vendas;
+CREATE TRIGGER trg_numerar_venda_por_igreja
+  BEFORE INSERT ON tab_vendas
+  FOR EACH ROW EXECUTE FUNCTION public.numerar_venda_por_igreja();
 
 -- ============================================================
 -- 6. Trigger: criar igreja + vínculo de owner no cadastro
