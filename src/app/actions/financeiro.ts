@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
-import { hojeBR, limitesDiaBR } from "@/lib/data-br"
+import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import { cancelarVenda } from "@/app/actions/vendas"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
@@ -474,4 +474,143 @@ export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
     .order("data_hora", { ascending: false })
 
   return (data ?? []) as ExtratoFinanceiro[]
+}
+
+// #8: só edita/exclui movimentação com conta_pagar_id preenchido (despesa
+// paga por pagarConta). Linhas de venda/fiado (venda_id) são geridas em
+// Vendas/Contas a Receber, que já sincronizam venda<->conta com segurança
+// (#13) — editar/excluir aqui direto reabriria o mesmo tipo de dessincronia,
+// só que sem a trava de valor que aquela issue construiu.
+export async function editarMovimentacaoExtrato(
+  id: string,
+  dados: { valor: number; descricao: string }
+): Promise<{ error?: string; success?: boolean }> {
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user) return { error: "Não autenticado" }
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
+  if (!dados.descricao || isNaN(dados.valor) || dados.valor <= 0) {
+    return { error: "Preencha todos os campos obrigatórios" }
+  }
+
+  const { data: movimentacao } = await supabase
+    .from("tab_extrato_financeiro")
+    .select("data_hora, conta_pagar_id")
+    .eq("id", id)
+    .eq("igreja_id", igrejaId)
+    .maybeSingle()
+
+  if (!movimentacao) return { error: "Movimentação não encontrada" }
+  if (!movimentacao.conta_pagar_id) {
+    return { error: "Só despesas pagas (lançadas por Contas a Pagar) podem ser editadas aqui. Vendas e recebimentos de fiado são geridos nas telas de Vendas e Contas a Receber." }
+  }
+  if (await diaFechado(supabase, igrejaId, dataBR(movimentacao.data_hora))) {
+    return { error: "O caixa deste dia já foi fechado. Não é possível editar." }
+  }
+
+  // Sem forma_pagamento de propósito (achado do financeiro-reviewer): o
+  // fechamento (fechar_caixa e calcularResumo) desconta TODA saída do
+  // dinheiro em caixa, sem olhar a forma — funciona hoje porque pagarConta
+  // sempre grava "dinheiro". Deixar editar pra pix/cartão faria uma saída
+  // paga por PIX ser descontada da gaveta de dinheiro, gerando uma
+  // "diferença" falsa no fechamento.
+  // .select("id") + checagem de 0 linhas: sem isso, editar uma linha que
+  // acabou de ser excluída (por outra pessoa, entre a leitura lá em cima e
+  // este update) passava como sucesso silencioso e ainda gravava o valor
+  // editado em tab_contas_pagar mais abaixo — reabrindo a mesma divergência
+  // do achado 2, só que pelo lado da edição (achado do financeiro-reviewer).
+  const { data: linhasEditadas, error } = await supabase
+    .from("tab_extrato_financeiro")
+    .update({ valor: dados.valor, descricao: dados.descricao })
+    .eq("id", id)
+    .eq("igreja_id", igrejaId)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhasEditadas || linhasEditadas.length === 0) {
+    return { error: "Movimentação não encontrada. Atualize a página." }
+  }
+
+  // Mantém tab_contas_pagar.valor/descricao em sincronia com o que o
+  // extrato realmente registra — senão Contas a Pagar mostraria um valor
+  // "pago" diferente do que saiu do caixa, e excluir a movimentação depois
+  // reabriria a conta com o valor ERRADO (o antigo, não o editado).
+  const { error: errContaPagar } = await supabase
+    .from("tab_contas_pagar")
+    .update({ valor: dados.valor, descricao: dados.descricao })
+    .eq("id", movimentacao.conta_pagar_id)
+    .eq("igreja_id", igrejaId)
+    .eq("pago", true)
+
+  if (errContaPagar) return { error: mensagemDeErro(errContaPagar) }
+
+  revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/contas-pagar")
+  revalidatePath("/financeiro/fechamento")
+  return { success: true }
+}
+
+export async function excluirMovimentacaoExtrato(id: string): Promise<{ error?: string; success?: boolean }> {
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user) return { error: "Não autenticado" }
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
+  const { data: movimentacao } = await supabase
+    .from("tab_extrato_financeiro")
+    .select("data_hora, conta_pagar_id")
+    .eq("id", id)
+    .eq("igreja_id", igrejaId)
+    .maybeSingle()
+
+  if (!movimentacao) return { error: "Movimentação não encontrada" }
+  if (!movimentacao.conta_pagar_id) {
+    return { error: "Só despesas pagas (lançadas por Contas a Pagar) podem ser excluídas aqui. Vendas são canceladas na tela de Vendas; recebimento de fiado não pode ser desfeito por aqui." }
+  }
+  if (await diaFechado(supabase, igrejaId, dataBR(movimentacao.data_hora))) {
+    return { error: "O caixa deste dia já foi fechado. Não é possível excluir." }
+  }
+
+  // Apaga a movimentação ANTES de reabrir a conta em Contas a Pagar
+  // (ordem importa — achado do financeiro-reviewer): se fosse o contrário,
+  // uma janela entre os dois passos deixaria a conta "em aberto" enquanto
+  // a saída original ainda existe no extrato — pagarConta rodando nesse
+  // meio tempo lançaria uma SEGUNDA saída pra mesma despesa, e se o delete
+  // desta linha falhasse depois (dia fechado nesse instante, erro de
+  // rede), o rollback devolveria pago=true mas as duas saídas ficariam
+  // contando no caixa. Apagando primeiro (exigindo exatamente 1 linha
+  // afetada), a conta continua pago=true sem saída até o segundo passo —
+  // pagarConta rejeita "já foi paga" nesse intervalo, então não tem como
+  // duplicar.
+  const { data: linhasApagadas, error } = await supabase
+    .from("tab_extrato_financeiro")
+    .delete()
+    .eq("id", id)
+    .eq("igreja_id", igrejaId)
+    .select("id")
+
+  if (error) return { error: mensagemDeErro(error) }
+  if (!linhasApagadas || linhasApagadas.length === 0) {
+    return { error: "Movimentação não encontrada. Atualize a página." }
+  }
+
+  // Desfaz o pagamento da despesa ligada — senão ela ficava "paga" pra
+  // sempre em Contas a Pagar sem nenhuma saída no caixa que sustente esse
+  // status. Se isso falhar aqui, a movimentação já foi apagada mas a
+  // conta continua "paga" sem saída — estado que trava (não deixa
+  // duplicar dinheiro) e pode ser corrigido manualmente no Supabase; não
+  // reverte o delete porque não há como "desfazer" um delete que já
+  // commitou sem arriscar reinserir dados inconsistentes.
+  const { error: errContaPagar } = await supabase
+    .from("tab_contas_pagar")
+    .update({ pago: false })
+    .eq("id", movimentacao.conta_pagar_id)
+    .eq("igreja_id", igrejaId)
+    .eq("pago", true)
+
+  if (errContaPagar) return { error: mensagemDeErro(errContaPagar) }
+
+  revalidatePath("/financeiro/extrato")
+  revalidatePath("/financeiro/contas-pagar")
+  revalidatePath("/financeiro/fechamento")
+  return { success: true }
 }
