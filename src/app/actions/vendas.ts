@@ -142,6 +142,7 @@ export async function criarVenda(dados: {
     return {
       venda_id: venda.id,
       item_id: i.item_id,
+      igreja_id: igrejaId,
       quantidade: i.quantidade,
       valor_unitario: preco,
       subtotal: i.quantidade * preco,

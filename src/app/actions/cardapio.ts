@@ -74,7 +74,7 @@ export async function salvarCardapioHoje(itemIds: string[]) {
     .eq("cardapio_id", cardapio!.id)
 
   if (itemIds.length > 0) {
-    const rows = itemIds.map((item_id) => ({ cardapio_id: cardapio!.id, item_id }))
+    const rows = itemIds.map((item_id) => ({ cardapio_id: cardapio!.id, item_id, igreja_id: igrejaId }))
     const { error } = await supabase.from("tab_cardapio_dia_itens").insert(rows)
     if (error) return { error: mensagemDeErro(error) }
   }

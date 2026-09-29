@@ -54,7 +54,11 @@ CREATE TABLE IF NOT EXISTS tab_itens (
   nome TEXT NOT NULL,
   preco NUMERIC(10, 2) NOT NULL CHECK (preco >= 0),
   imagem_url TEXT,
-  ativo BOOLEAN DEFAULT TRUE
+  ativo BOOLEAN DEFAULT TRUE,
+  -- Sustenta a FK composta (item_id, igreja_id) das tabelas filhas (#21) —
+  -- sem isso, referenciar um item por FK simples só confere que o UUID
+  -- existe em algum lugar, não que é da mesma igreja de quem referencia.
+  UNIQUE (id, igreja_id)
 );
 
 -- ============================================================
@@ -67,17 +71,29 @@ CREATE TABLE IF NOT EXISTS tab_cardapio_dia (
   igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
   data DATE NOT NULL,
   observacoes TEXT,
-  UNIQUE (igreja_id, data)
+  UNIQUE (igreja_id, data),
+  UNIQUE (id, igreja_id)
 );
 
 -- ============================================================
 -- TABELA: tab_cardapio_dia_itens (Itens do Cardápio)
 -- ============================================================
+-- igreja_id próprio (não só via cardapio_id) sustenta a FK composta (#21):
+-- sem ela, item_id UUID REFERENCES tab_itens(id) só confere que o UUID
+-- existe em ALGUMA igreja — um membro conseguiria, via API direta,
+-- referenciar um item_id de outra igreja no próprio cardápio (RLS ainda
+-- esconde a leitura, mas cria um vínculo cruzado que pode quebrar
+-- excluirProduto da igreja dona do item por violação de FK).
 CREATE TABLE IF NOT EXISTS tab_cardapio_dia_itens (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  cardapio_id UUID NOT NULL REFERENCES tab_cardapio_dia(id) ON DELETE CASCADE,
-  item_id UUID NOT NULL REFERENCES tab_itens(id) ON DELETE CASCADE,
-  UNIQUE (cardapio_id, item_id)
+  igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
+  cardapio_id UUID NOT NULL,
+  item_id UUID NOT NULL,
+  UNIQUE (cardapio_id, item_id),
+  CONSTRAINT tab_cardapio_dia_itens_cardapio_id_fkey
+    FOREIGN KEY (cardapio_id, igreja_id) REFERENCES tab_cardapio_dia (id, igreja_id) ON DELETE CASCADE,
+  CONSTRAINT tab_cardapio_dia_itens_item_id_fkey
+    FOREIGN KEY (item_id, igreja_id) REFERENCES tab_itens (id, igreja_id) ON DELETE CASCADE
 );
 
 -- ============================================================
@@ -101,19 +117,27 @@ CREATE TABLE IF NOT EXISTS tab_vendas (
   desconto NUMERIC(10, 2) DEFAULT 0 CHECK (desconto >= 0),
   forma_pagamento TEXT NOT NULL CHECK (forma_pagamento IN ('dinheiro', 'pix', 'cartao', 'fiado')),
   status TEXT DEFAULT 'pago' CHECK (status IN ('pendente', 'pago', 'cancelado')),
-  UNIQUE (igreja_id, numero_pedido)
+  UNIQUE (igreja_id, numero_pedido),
+  UNIQUE (id, igreja_id)
 );
 
 -- ============================================================
 -- TABELA: tab_vendas_itens (Itens da Venda)
 -- ============================================================
+-- Mesmo raciocínio de tab_cardapio_dia_itens: igreja_id próprio pra FK
+-- composta (#21), fechando o mesmo tipo de vínculo cruzado entre igrejas.
 CREATE TABLE IF NOT EXISTS tab_vendas_itens (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  venda_id UUID NOT NULL REFERENCES tab_vendas(id) ON DELETE CASCADE,
-  item_id UUID NOT NULL REFERENCES tab_itens(id),
+  igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
+  venda_id UUID NOT NULL,
+  item_id UUID NOT NULL,
   quantidade INTEGER NOT NULL CHECK (quantidade > 0),
   valor_unitario NUMERIC(10, 2) NOT NULL CHECK (valor_unitario >= 0),
-  subtotal NUMERIC(10, 2) NOT NULL CHECK (subtotal >= 0)
+  subtotal NUMERIC(10, 2) NOT NULL CHECK (subtotal >= 0),
+  CONSTRAINT tab_vendas_itens_venda_id_fkey
+    FOREIGN KEY (venda_id, igreja_id) REFERENCES tab_vendas (id, igreja_id) ON DELETE CASCADE,
+  CONSTRAINT tab_vendas_itens_item_id_fkey
+    FOREIGN KEY (item_id, igreja_id) REFERENCES tab_itens (id, igreja_id)
 );
 
 -- ============================================================
@@ -129,7 +153,12 @@ CREATE TABLE IF NOT EXISTS tab_extrato_financeiro (
   forma_pagamento TEXT NOT NULL CHECK (forma_pagamento IN ('dinheiro', 'pix', 'cartao', 'fiado')),
   valor NUMERIC(10, 2) NOT NULL CHECK (valor >= 0),
   descricao TEXT NOT NULL,
-  venda_id UUID REFERENCES tab_vendas(id) ON DELETE SET NULL
+  -- Composta com igreja_id (#21): FK simples só confere que o UUID existe
+  -- em alguma venda de alguma igreja, não que é da mesma igreja da linha
+  -- do extrato.
+  venda_id UUID,
+  CONSTRAINT tab_extrato_financeiro_venda_id_fkey
+    FOREIGN KEY (venda_id, igreja_id) REFERENCES tab_vendas (id, igreja_id) ON DELETE SET NULL (venda_id)
 );
 
 -- ============================================================
@@ -147,7 +176,10 @@ CREATE TABLE IF NOT EXISTS tab_contas_receber (
   pago BOOLEAN DEFAULT FALSE,
   data_baixa DATE,
   forma_pagamento_baixa TEXT CHECK (forma_pagamento_baixa IN ('dinheiro', 'pix', 'cartao')),
-  venda_id UUID REFERENCES tab_vendas(id) ON DELETE SET NULL
+  -- Composta com igreja_id (#21), mesmo motivo de tab_extrato_financeiro.
+  venda_id UUID,
+  CONSTRAINT tab_contas_receber_venda_id_fkey
+    FOREIGN KEY (venda_id, igreja_id) REFERENCES tab_vendas (id, igreja_id) ON DELETE SET NULL (venda_id)
 );
 
 -- ============================================================
@@ -293,15 +325,13 @@ CREATE POLICY "membros_igreja_cardapio" ON tab_cardapio_dia
   FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
   WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
 
--- Políticas para tab_cardapio_dia_itens (via cardápio da igreja)
+-- Políticas para tab_cardapio_dia_itens — direto por igreja_id próprio
+-- (#21), não mais via subquery em tab_cardapio_dia: o subquery só cobria
+-- USING, sem WITH CHECK explícito (FOR ALL sem WITH CHECK reusa a USING
+-- pro INSERT, mas ainda checava só o cardápio, nunca o item_id).
 CREATE POLICY "membros_igreja_cardapio_itens" ON tab_cardapio_dia_itens
-  FOR ALL TO authenticated USING (
-    EXISTS (
-      SELECT 1 FROM tab_cardapio_dia
-      WHERE id = cardapio_id
-        AND igreja_id IN (SELECT private.minhas_igrejas())
-    )
-  );
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
+  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
 
 -- Políticas para tab_vendas
 CREATE POLICY "membros_igreja_vendas" ON tab_vendas
@@ -309,14 +339,10 @@ CREATE POLICY "membros_igreja_vendas" ON tab_vendas
   WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
 
 -- Políticas para tab_vendas_itens (via venda da igreja)
+-- Direto por igreja_id próprio (#21), mesmo motivo de tab_cardapio_dia_itens.
 CREATE POLICY "membros_igreja_vendas_itens" ON tab_vendas_itens
-  FOR ALL TO authenticated USING (
-    EXISTS (
-      SELECT 1 FROM tab_vendas
-      WHERE id = venda_id
-        AND igreja_id IN (SELECT private.minhas_igrejas())
-    )
-  );
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
+  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
 
 -- Políticas para tab_extrato_financeiro
 CREATE POLICY "membros_igreja_extrato" ON tab_extrato_financeiro
