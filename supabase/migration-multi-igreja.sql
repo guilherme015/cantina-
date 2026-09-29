@@ -13,12 +13,24 @@
 -- resultado desta migração).
 --
 -- Rode isso com o app parado (ou pelo menos sem ninguém usando a tela
--- de Vendas/Cardápio/Financeiro no momento): se uma venda ou produto
--- for inserido pelo app antigo bem no meio desta transação, a linha
--- nova entra sem igreja_id e o backfill abaixo não a pega (ele roda
--- antes do INSERT concorrente) — o SET NOT NULL no fim falha do mesmo
--- jeito. Se isso acontecer, é só rodar o script de novo.
+-- de Vendas/Cardápio/Financeiro no momento). O LOCK TABLE logo abaixo
+-- (item 0) cobre a janela entre o backfill e o SET NOT NULL: sem ele,
+-- uma venda ou produto inserido pelo app antigo bem no meio desta
+-- transação entra sem igreja_id, o backfill não pega (já rodou antes
+-- desse INSERT concorrente) e o SET NOT NULL falha (23502) mesmo com
+-- o backfill certo. Com o app rodando, o LOCK TABLE espera as
+-- transações em andamento terminarem e trava novas leituras/escritas
+-- nessas 7 tabelas até o fim desta migração; com o app parado ele é
+-- instantâneo.
 -- ============================================================
+
+-- ============================================================
+-- 0. Trava as tabelas de negócio pelo resto da transação — ver
+--    explicação acima. ACCESS EXCLUSIVE também bloqueia SELECT, não só
+--    escrita; é o preço de rodar com o app no ar.
+-- ============================================================
+LOCK TABLE tab_itens, tab_cardapio_dia, tab_vendas, tab_extrato_financeiro,
+  tab_contas_receber, tab_contas_pagar, tab_fechamento_caixa IN ACCESS EXCLUSIVE MODE;
 
 -- ============================================================
 -- 1. Tabelas novas
