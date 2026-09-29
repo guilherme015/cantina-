@@ -2,23 +2,22 @@
 -- MIGRAÇÃO: multi-igreja (tenant) — rodar UMA VEZ no SQL Editor
 -- do projeto Supabase que já tem o schema antigo (sem igreja_id).
 --
--- Pré-condição verificada antes de escrever este script: todas as
--- tabelas do projeto "Cantina Plus" estavam com 0 linhas — incluindo
--- auth.users (0 contas cadastradas ainda). Por isso os ALTER TABLE
--- abaixo já aplicam NOT NULL direto, sem etapa de backfill, e o
--- trigger do item 6 (criação de igreja no cadastro) não precisa lidar
--- com usuário pré-existente sem igreja.
---
--- Se este script for reaproveitado num projeto que já tem contas
--- (auth.users com linhas), rode ANTES do item 6 um backfill que crie
--- 1 igreja + 1 vínculo owner pra cada auth.users sem linha em
--- igreja_membros — sem isso esses usuários ficam sem igreja e sem
--- nenhum jeito de criar uma (não existe INSERT client-side nessas
--- tabelas, só o trigger).
+-- O "rows" que list_tables mostra é uma ESTIMATIVA (pg_class.reltuples),
+-- não uma contagem exata — não dá pra confiar nela pra decidir se um
+-- backfill é necessário. Por isso este script agora faz backfill
+-- incondicional (idempotente: não faz nada se realmente não houver
+-- linha nenhuma) em vez de assumir "0 linhas" como antes.
 --
 -- Depois de rodar este arquivo uma vez, supabase/schema.sql passa
 -- a ser a referência para o estado do banco (ele já reflete o
 -- resultado desta migração).
+--
+-- Rode isso com o app parado (ou pelo menos sem ninguém usando a tela
+-- de Vendas/Cardápio/Financeiro no momento): se uma venda ou produto
+-- for inserido pelo app antigo bem no meio desta transação, a linha
+-- nova entra sem igreja_id e o backfill abaixo não a pega (ele roda
+-- antes do INSERT concorrente) — o SET NOT NULL no fim falha do mesmo
+-- jeito. Se isso acontecer, é só rodar o script de novo.
 -- ============================================================
 
 -- ============================================================
@@ -43,6 +42,39 @@ CREATE TABLE IF NOT EXISTS igreja_membros (
 );
 
 -- ============================================================
+-- 1b. Backfill: 1 igreja + 1 vínculo owner pra cada usuário que já
+--     tem dado em alguma tabela de negócio (schema antigo, isolado por
+--     user_id) mas ainda não tem linha em igreja_membros. Sem isso,
+--     esse usuário fica sem igreja e sem nenhum jeito de criar uma
+--     depois (não existe INSERT client-side nessas tabelas, só o
+--     trigger de cadastro, que só dispara num signUp novo).
+--
+--     Cada usuário existente vira dono da própria igreja — preserva
+--     exatamente o isolamento que já existia (cada um só via os
+--     próprios dados) em vez de misturar dados de usuários diferentes
+--     numa igreja só.
+-- ============================================================
+WITH usuarios_sem_igreja AS (
+  SELECT DISTINCT user_id FROM (
+    SELECT user_id FROM tab_itens
+    UNION SELECT user_id FROM tab_cardapio_dia
+    UNION SELECT user_id FROM tab_vendas
+    UNION SELECT user_id FROM tab_extrato_financeiro
+    UNION SELECT user_id FROM tab_contas_receber
+    UNION SELECT user_id FROM tab_contas_pagar
+    UNION SELECT user_id FROM tab_fechamento_caixa
+  ) todos_os_usuarios
+  WHERE user_id NOT IN (SELECT user_id FROM igreja_membros)
+),
+novas_igrejas AS (
+  INSERT INTO igrejas (nome, owner_user_id)
+  SELECT 'Minha Igreja', user_id FROM usuarios_sem_igreja
+  RETURNING id, owner_user_id
+)
+INSERT INTO igreja_membros (igreja_id, user_id, papel)
+SELECT id, owner_user_id, 'owner' FROM novas_igrejas;
+
+-- ============================================================
 -- 2. Coluna igreja_id nas tabelas existentes
 -- ============================================================
 ALTER TABLE tab_itens ADD COLUMN IF NOT EXISTS igreja_id UUID REFERENCES igrejas(id) ON DELETE CASCADE;
@@ -52,6 +84,18 @@ ALTER TABLE tab_extrato_financeiro ADD COLUMN IF NOT EXISTS igreja_id UUID REFER
 ALTER TABLE tab_contas_receber ADD COLUMN IF NOT EXISTS igreja_id UUID REFERENCES igrejas(id) ON DELETE CASCADE;
 ALTER TABLE tab_contas_pagar ADD COLUMN IF NOT EXISTS igreja_id UUID REFERENCES igrejas(id) ON DELETE CASCADE;
 ALTER TABLE tab_fechamento_caixa ADD COLUMN IF NOT EXISTS igreja_id UUID REFERENCES igrejas(id) ON DELETE CASCADE;
+
+-- ============================================================
+-- 2b. Backfill do igreja_id em si, a partir do vínculo criado acima —
+--     roda mesmo se não existir linha nenhuma (não faz nada nesse caso).
+-- ============================================================
+UPDATE tab_itens t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_cardapio_dia t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_vendas t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_extrato_financeiro t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_contas_receber t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_contas_pagar t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
+UPDATE tab_fechamento_caixa t SET igreja_id = m.igreja_id FROM igreja_membros m WHERE m.user_id = t.user_id AND t.igreja_id IS NULL;
 
 ALTER TABLE tab_itens ALTER COLUMN igreja_id SET NOT NULL;
 ALTER TABLE tab_cardapio_dia ALTER COLUMN igreja_id SET NOT NULL;
