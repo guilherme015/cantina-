@@ -1,7 +1,7 @@
 "use server"
 
 import { redirect } from "next/navigation"
-import { headers } from "next/headers"
+import { headers, cookies } from "next/headers"
 import { createClient } from "@/lib/supabase/server"
 import { senhaAtendeCriterios } from "@/lib/senha"
 import { sessaoVeioDeRecuperacao } from "@/lib/sessao-recuperacao"
@@ -139,6 +139,17 @@ export async function redefinirSenha(formData: FormData) {
   // recuperação, poderia voltar em /redefinir-senha e trocar a senha de
   // novo enquanto durasse) e garante que só quem sabe a senha nova
   // consegue entrar a partir daqui.
-  await supabase.auth.signOut()
+  const { error: errSignOut } = await supabase.auth.signOut()
+  if (errSignOut) {
+    // auth-js só limpa a sessão local sozinho em 401/403/404 — num erro de
+    // rede ou 5xx do Supabase, ela ficaria válida no servidor com o cookie
+    // intacto. Apaga os cookies da sessão na unha em vez de confiar só no
+    // signOut: a janela de 30min de sessaoVeioDeRecuperacao já limita o
+    // estrago, mas não custa fechar de vez.
+    const cookieStore = await cookies()
+    for (const c of cookieStore.getAll()) {
+      if (c.name.startsWith("sb-")) cookieStore.delete(c.name)
+    }
+  }
   redirect("/login?senha_alterada=1")
 }
