@@ -142,6 +142,7 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
     forma_pagamento: "dinheiro" as const,
     valor: (conta as ContaPagar).valor,
     descricao: (conta as ContaPagar).descricao,
+    conta_pagar_id: id,
     user_id: user.id,
     igreja_id: igrejaId,
     data_hora: new Date().toISOString(),

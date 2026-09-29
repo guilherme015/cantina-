@@ -162,8 +162,34 @@ CREATE TABLE IF NOT EXISTS tab_contas_pagar (
   valor NUMERIC(10, 2) NOT NULL CHECK (valor >= 0),
   data DATE NOT NULL,
   pago BOOLEAN DEFAULT FALSE,
-  categoria TEXT
+  categoria TEXT,
+  UNIQUE (id, igreja_id)
 );
+
+-- conta_pagar_id vem depois da CREATE TABLE (não dentro dela) porque
+-- tab_contas_pagar só existe a partir daqui — tab_extrato_financeiro é
+-- criada antes (#12). Liga a saída lançada por pagarConta de volta à
+-- despesa que a gerou, pra permitir editar/excluir a movimentação de
+-- despesa paga sincronizado com o estado em Contas a Pagar (issue #8,
+-- hoje bloqueada por não existir esse link).
+--
+-- FK composta (conta_pagar_id, igreja_id), não só conta_pagar_id: a
+-- checagem de FK do Postgres roda como dono da tabela e ignora RLS, então
+-- uma FK simples deixaria um membro gravar (via API direta) um
+-- conta_pagar_id apontando pra uma conta de OUTRA igreja — sem vazar
+-- dado (RLS ainda esconde a leitura), mas abrindo uma trava permanente
+-- entre igrejas: se A excluir a conta ligada, o ON DELETE SET NULL vira
+-- um UPDATE na linha do extrato de A, mas se o UUID fosse de uma conta de
+-- B, o SET NULL ainda mexe só na linha de A — o risco real é a #8 usar
+-- esse link no sentido inverso (extrato -> conta) numa RPC sem checar
+-- igreja_id, e aí sim editar/excluir despesa de outra igreja. A FK
+-- composta fecha isso no banco, não só no código. `SET NULL (coluna)`
+-- exige Postgres 15+ (o projeto real roda Postgres 17).
+ALTER TABLE tab_extrato_financeiro
+  ADD COLUMN conta_pagar_id UUID,
+  ADD CONSTRAINT tab_extrato_financeiro_conta_pagar_id_fkey
+    FOREIGN KEY (conta_pagar_id, igreja_id) REFERENCES tab_contas_pagar (id, igreja_id)
+    ON DELETE SET NULL (conta_pagar_id);
 
 -- ============================================================
 -- TABELA: tab_fechamento_caixa (Fechamento do Dia)
