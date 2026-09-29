@@ -393,11 +393,64 @@ export interface Database {
         }
         Relationships: []
       }
+      tab_reaberturas_caixa: {
+        Row: {
+          id: string
+          created_at: string
+          igreja_id: string
+          user_id: string | null
+          fechamento_id: string
+          fechado_por: string | null
+          fechado_em: string
+          data: string
+          justificativa: string
+          saldo_inicial: number
+          entradas_dinheiro: number
+          entradas_pix: number
+          entradas_cartao: number
+          total_saidas: number
+          valor_calculado: number
+          valor_informado: number
+          diferenca: number
+          observacoes: string | null
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          igreja_id: string
+          user_id?: string | null
+          fechamento_id: string
+          fechado_por?: string | null
+          fechado_em: string
+          data: string
+          justificativa: string
+          saldo_inicial: number
+          entradas_dinheiro: number
+          entradas_pix: number
+          entradas_cartao: number
+          total_saidas: number
+          valor_calculado: number
+          valor_informado: number
+          diferenca: number
+          observacoes?: string | null
+        }
+        Update: {
+          id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      reabrir_caixa: {
+        Args: {
+          p_data: string
+          p_justificativa: string
+        }
+        Returns: void
+      }
       fechar_caixa: {
         Args: {
           p_data: string
@@ -425,6 +478,7 @@ export type Venda = Database["public"]["Tables"]["tab_vendas"]["Row"]
 export type VendaItem = Database["public"]["Tables"]["tab_vendas_itens"]["Row"]
 export type ExtratoFinanceiro = Database["public"]["Tables"]["tab_extrato_financeiro"]["Row"]
 export type FechamentoCaixa = Database["public"]["Tables"]["tab_fechamento_caixa"]["Row"]
+export type ReaberturaCaixa = Database["public"]["Tables"]["tab_reaberturas_caixa"]["Row"]
 export type ContaReceber = Database["public"]["Tables"]["tab_contas_receber"]["Row"]
 export type ContaPagar = Database["public"]["Tables"]["tab_contas_pagar"]["Row"]
 

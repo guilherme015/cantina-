@@ -6,9 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { CheckCircle, Lock, TrendingUp, TrendingDown } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { CheckCircle, Lock, LockOpen, TrendingUp, TrendingDown } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
-import { fecharCaixa, type ResumoDia } from "@/app/actions/fechamento"
+import { fecharCaixa, reabrirCaixa, type ResumoDia } from "@/app/actions/fechamento"
 import { toast } from "@/hooks/use-toast"
 import type { FechamentoCaixa } from "@/types/database"
 
@@ -22,6 +24,9 @@ export function FechamentoClient({ resumoInicial, fechamentos }: Props) {
   const [valorInformado, setValorInformado] = useState("")
   const [observacoes, setObservacoes] = useState("")
   const [isPending, startTransition] = useTransition()
+  const [reabrirFechamento, setReabrirFechamento] = useState<FechamentoCaixa | null>(null)
+  const [justificativa, setJustificativa] = useState("")
+  const [isReabrindo, startReabrirTransition] = useTransition()
 
   const fechamentoHoje = resumoInicial
     ? fechamentos.find((f) => f.data === resumoInicial.data)
@@ -52,6 +57,31 @@ export function FechamentoClient({ resumoInicial, fechamentos }: Props) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
       } else {
         toast({ title: "Caixa fechado!", variant: "success" })
+      }
+    })
+  }
+
+  function handleReabrir() {
+    if (!reabrirFechamento) return
+    if (!justificativa.trim()) {
+      toast({ title: "Erro", description: "Informe a justificativa para reabrir o caixa", variant: "destructive" })
+      return
+    }
+    startReabrirTransition(async () => {
+      const result = await reabrirCaixa(reabrirFechamento.data, justificativa)
+      if (result.error) {
+        toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else {
+        toast({ title: "Caixa reaberto", variant: "success" })
+        // O formulário de fechar reaparece (fechamentoHoje deixa de existir) —
+        // preenche o saldo inicial com o do fechamento desfeito, em vez de
+        // deixar o "0" padrão, e limpa valor contado/observações antigos
+        // (ficavam pendurados no estado do último fechamento da sessão).
+        setSaldoInicial(String(reabrirFechamento.saldo_inicial))
+        setValorInformado("")
+        setObservacoes("")
+        setReabrirFechamento(null)
+        setJustificativa("")
       }
     })
   }
@@ -182,15 +212,56 @@ export function FechamentoClient({ resumoInicial, fechamentos }: Props) {
                       Calculado {formatCurrency(f.valor_calculado)} · Informado {formatCurrency(f.valor_informado)}
                     </p>
                   </div>
-                  <Badge variant={f.diferenca === 0 ? "secondary" : "destructive"}>
-                    Diferença {formatCurrency(f.diferenca)}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={f.diferenca === 0 ? "secondary" : "destructive"}>
+                      Diferença {formatCurrency(f.diferenca)}
+                    </Badge>
+                    {f.data === resumoInicial.data && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        onClick={() => setReabrirFechamento(f)}
+                      >
+                        <LockOpen className="w-3.5 h-3.5" />
+                        Reabrir
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={reabrirFechamento !== null} onOpenChange={(open) => !open && setReabrirFechamento(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reabrir caixa de hoje ({reabrirFechamento ? formatDate(reabrirFechamento.data) : ""})</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Só é possível reabrir o caixa de hoje. O fechamento será apagado e o dia volta a aceitar vendas e lançamentos. Essa ação é registrada com a justificativa abaixo — não é possível desfazer a reabertura em si.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="justificativa">Justificativa *</Label>
+              <Textarea
+                id="justificativa"
+                value={justificativa}
+                onChange={(e) => setJustificativa(e.target.value)}
+                placeholder="Por que este fechamento está sendo reaberto?"
+                required
+              />
+            </div>
+            <Button type="button" onClick={handleReabrir} disabled={isReabrindo} className="gap-2">
+              <LockOpen className="w-4 h-4" />
+              {isReabrindo ? "Reabrindo..." : "Confirmar reabertura"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

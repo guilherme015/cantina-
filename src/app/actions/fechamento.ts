@@ -145,3 +145,30 @@ export async function fecharCaixa(dados: {
   revalidatePath("/financeiro/fechamento")
   return { success: true }
 }
+
+export async function reabrirCaixa(data: string, justificativa: string): Promise<{ error?: string; success?: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  if (!justificativa.trim()) {
+    return { error: "Informe a justificativa para reabrir o caixa" }
+  }
+
+  // Mesma lógica de fecharCaixa: a RPC resolve a igreja sozinha, pega o
+  // mesmo advisory lock antes de agir, grava o snapshot do fechamento em
+  // tab_reaberturas_caixa (auditoria — não existe policy de DELETE em
+  // tab_fechamento_caixa pra apagar sem deixar rastro) e só então apaga.
+  const { error } = await supabase.rpc("reabrir_caixa", {
+    p_data: data,
+    p_justificativa: justificativa.trim(),
+  })
+
+  if (error) {
+    if (error.code === "P0001") return { error: error.message }
+    return { error: mensagemDeErro(error) }
+  }
+
+  revalidatePath("/financeiro/fechamento")
+  return { success: true }
+}
