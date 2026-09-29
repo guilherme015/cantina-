@@ -4,9 +4,9 @@ import { useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Calendar, Package, Save } from "lucide-react"
+import { Calendar, Package, Save, Copy } from "lucide-react"
 import { formatCurrency } from "@/lib/utils"
-import { salvarCardapioHoje } from "@/app/actions/cardapio"
+import { salvarCardapioHoje, copiarUltimoCardapio } from "@/app/actions/cardapio"
 import { toast } from "@/hooks/use-toast"
 import type { Item } from "@/types/database"
 
@@ -39,19 +39,43 @@ export function CardapioClient({ produtos, idsHoje }: Props) {
     })
   }
 
+  function handleCopiarUltimo() {
+    // Sobrescreve tudo que já estiver selecionado (aqui ou salvo por outro
+    // membro) — confirma antes pra não perder uma seleção em andamento sem
+    // querer.
+    if (selecionados.size > 0 && !confirm(`Isso substitui os ${selecionados.size} produto(s) já selecionados hoje. Continuar?`)) {
+      return
+    }
+    startTransition(async () => {
+      const result = await copiarUltimoCardapio()
+      if (result.error) {
+        toast({ title: "Não deu pra copiar", description: result.error, variant: "destructive" })
+      } else {
+        setSelecionados(new Set(result.itemIds))
+        toast({ title: "Cardápio copiado!", description: `${result.itemIds?.length ?? 0} produto(s) disponíveis hoje`, variant: "success" })
+      }
+    })
+  }
+
   const ativos = produtos.filter((p) => p.ativo)
 
   return (
     <>
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
         <div className="bg-white border border-[var(--border)] rounded-md px-4 py-2">
           <p className="text-xs text-[var(--muted-foreground)]">Selecionados hoje</p>
           <p className="text-lg font-bold text-[var(--primary)]">{selecionados.size} produto(s)</p>
         </div>
-        <Button size="lg" className="gap-2" onClick={handleSalvar} disabled={isPending}>
-          <Save className="w-5 h-5" />
-          {isPending ? "Salvando..." : "Salvar Cardápio"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={handleCopiarUltimo} disabled={isPending}>
+            <Copy className="w-4 h-4" />
+            Copiar último cardápio
+          </Button>
+          <Button size="lg" className="gap-2" onClick={handleSalvar} disabled={isPending}>
+            <Save className="w-5 h-5" />
+            {isPending ? "Salvando..." : "Salvar Cardápio"}
+          </Button>
+        </div>
       </div>
 
       {ativos.length === 0 ? (

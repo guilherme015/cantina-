@@ -17,6 +17,20 @@ export type VendaItem = {
 
 export type VendaComItens = Venda & { tab_vendas_itens: VendaItem[] }
 
+async function cardapioHojeId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  igrejaId: string
+): Promise<string | null> {
+  const { data: cardapio } = await supabase
+    .from("tab_cardapio_dia")
+    .select("id")
+    .eq("igreja_id", igrejaId)
+    .eq("data", hojeBR())
+    .single()
+
+  return cardapio?.id ?? null
+}
+
 export async function listarVendasHoje(): Promise<VendaComItens[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -27,42 +41,20 @@ export async function listarVendasHoje(): Promise<VendaComItens[]> {
 
   const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
+  // Um único round trip via PostgREST embedding em vez de 3 (vendas, itens,
+  // produtos separados) — Vendas é a tela mais acessada do dia a dia, então
+  // essa latência a mais soma rápido.
   const { data: vendas, error } = await supabase
     .from("tab_vendas")
-    .select("*")
+    .select("*, tab_vendas_itens(quantidade, valor_unitario, subtotal, tab_itens(nome))")
     .eq("igreja_id", igrejaId)
     .gte("data_hora", inicio)
     .lt("data_hora", fimExclusivo)
     .order("data_hora", { ascending: false })
 
-  if (error || !vendas || vendas.length === 0) return []
+  if (error || !vendas) return []
 
-  const vendaIds = vendas.map((v) => v.id)
-
-  const { data: itens } = await supabase
-    .from("tab_vendas_itens")
-    .select("venda_id, quantidade, valor_unitario, subtotal, item_id")
-    .in("venda_id", vendaIds)
-
-  const itemIds = [...new Set((itens ?? []).map((i) => i.item_id))]
-
-  const { data: produtos } = itemIds.length > 0
-    ? await supabase.from("tab_itens").select("id, nome").in("id", itemIds)
-    : { data: [] }
-
-  const produtoMap = new Map((produtos ?? []).map((p) => [p.id, p.nome]))
-
-  return vendas.map((venda) => ({
-    ...venda,
-    tab_vendas_itens: (itens ?? [])
-      .filter((i) => i.item_id && i.venda_id === venda.id)
-      .map((i) => ({
-        quantidade: i.quantidade,
-        valor_unitario: i.valor_unitario,
-        subtotal: i.subtotal,
-        tab_itens: { nome: produtoMap.get(i.item_id) ?? "" },
-      })),
-  }))
+  return vendas as unknown as VendaComItens[]
 }
 
 export interface ItemVenda {
@@ -86,13 +78,50 @@ export async function criarVenda(dados: {
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   if (dados.itens.length === 0) return { error: "Adicione ao menos um item" }
+  if (dados.itens.some((i) => !Number.isInteger(i.quantidade) || i.quantidade <= 0)) {
+    return { error: "Quantidade inválida em um ou mais itens." }
+  }
 
   if (await diaFechado(supabase, igrejaId, hojeBR())) {
     return { error: "O caixa de hoje já foi fechado. Não é possível registrar novas vendas." }
   }
 
+  // A tela só oferece os produtos do cardápio de hoje, mas isso é só UI —
+  // uma aba aberta desde ontem, ou uma chamada direta a esta action, ainda
+  // conseguiria vender qualquer coisa sem essa conferência no servidor.
+  // Sem ela, "cardápio do dia" vira decoração. De quebra, busca o preço
+  // real de cada produto aqui: o preço que a tela manda é só o que ela
+  // carregou ao abrir a página, e não pode ser a fonte de verdade do valor
+  // cobrado (dá pra editar no devtools, ou o preço pode ter mudado com a
+  // aba aberta).
+  const cardapioId = await cardapioHojeId(supabase, igrejaId)
+  const { data: relacoesCardapio } = cardapioId
+    ? await supabase
+        .from("tab_cardapio_dia_itens")
+        .select("item_id, tab_itens!inner(ativo, preco)")
+        .eq("cardapio_id", cardapioId)
+        .eq("tab_itens.ativo", true)
+    : { data: [] }
+
+  const precoPorItem = new Map(
+    (relacoesCardapio ?? []).map((r) => [r.item_id, (r.tab_itens as unknown as { preco: number }).preco])
+  )
+  // Também rejeita (em vez de só substituir em silêncio) se o preço que a
+  // tela mandou não bater com o do banco: aceitar a venda com um total
+  // diferente do que o botão "Finalizar" mostrou pro operador cobrar do
+  // cliente gera uma diferença de caixa no fechamento do dia — mais
+  // seguro pedir pra atualizar a página do que gravar um valor que
+  // ninguém realmente cobrou.
+  const itemInvalido = dados.itens.some((i) => {
+    const precoBanco = precoPorItem.get(i.item_id)
+    return precoBanco === undefined || Math.round(precoBanco * 100) !== Math.round(i.valor_unitario * 100)
+  })
+  if (itemInvalido) {
+    return { error: "Um ou mais produtos não estão mais no cardápio de hoje, ou o preço mudou. Atualize a página e tente de novo." }
+  }
+
   // O desconto nunca pode superar o subtotal — mesma regra exibida na UI.
-  const subtotal = dados.itens.reduce((sum, i) => sum + i.quantidade * i.valor_unitario, 0)
+  const subtotal = dados.itens.reduce((sum, i) => sum + i.quantidade * precoPorItem.get(i.item_id)!, 0)
   const desconto = Math.min(Math.max(0, dados.desconto), subtotal)
   const total = subtotal - desconto
 
@@ -115,16 +144,25 @@ export async function criarVenda(dados: {
 
   if (errVenda) return { error: mensagemDeErro(errVenda) }
 
-  const itensRows = dados.itens.map((i) => ({
-    venda_id: venda.id,
-    item_id: i.item_id,
-    quantidade: i.quantidade,
-    valor_unitario: i.valor_unitario,
-    subtotal: i.quantidade * i.valor_unitario,
-  }))
+  const itensRows = dados.itens.map((i) => {
+    const preco = precoPorItem.get(i.item_id)!
+    return {
+      venda_id: venda.id,
+      item_id: i.item_id,
+      quantidade: i.quantidade,
+      valor_unitario: preco,
+      subtotal: i.quantidade * preco,
+    }
+  })
 
   const { error: errItens } = await supabase.from("tab_vendas_itens").insert(itensRows)
-  if (errItens) return { error: mensagemDeErro(errItens) }
+  if (errItens) {
+    // Sem isso, a venda fica órfã: "pago", sem nenhum item e sem entrada no
+    // extrato (o passo seguinte nunca roda) — ainda assim somada no total
+    // do dia de Vendas.
+    await supabase.from("tab_vendas").delete().eq("id", venda.id).eq("igreja_id", igrejaId)
+    return { error: mensagemDeErro(errItens) }
+  }
 
   const descricao = dados.cliente
     ? `Venda para ${dados.cliente}`
@@ -152,7 +190,7 @@ export async function criarVenda(dados: {
       return { error: "O caixa foi fechado enquanto a venda era confirmada. Tente novamente." }
     }
   } else {
-    await supabase.from("tab_contas_receber").insert({
+    const { error: errContaReceber } = await supabase.from("tab_contas_receber").insert({
       cliente: dados.cliente || "Cliente",
       valor_devido: total,
       data_venda: hojeBR(),
@@ -161,6 +199,15 @@ export async function criarVenda(dados: {
       user_id: user.id,
       igreja_id: igrejaId,
     })
+
+    if (errContaReceber) {
+      // Mesmo caso do ramo não-fiado: sem isso, a venda fica "pendente" pra
+      // sempre (somada no total do dia) sem nenhuma conta a receber pra
+      // cobrar depois — o fiado simplesmente some.
+      await supabase.from("tab_vendas_itens").delete().eq("venda_id", venda.id)
+      await supabase.from("tab_vendas").delete().eq("id", venda.id).eq("igreja_id", igrejaId)
+      return { error: mensagemDeErro(errContaReceber) }
+    }
   }
 
   revalidatePath("/vendas")
@@ -278,38 +325,26 @@ export async function listarItensCardapioHoje(): Promise<Item[]> {
   const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return [] as Item[]
 
-  const hoje = new Date().toISOString().split("T")[0]
+  // Sem cardápio configurado pra hoje = nada disponível pra venda. Antes
+  // isso caía num fallback que mostrava TODOS os produtos ativos, o que
+  // contradiz a ideia de "cardápio do dia": um dia com só 2 produtos
+  // selecionados não pode deixar o vendedor oferecer os outros 20 do
+  // catálogo. A tela de Vendas já trata itensDisponiveis vazio com uma
+  // mensagem direcionando pra configurar o cardápio (ver vendas-client.tsx).
+  const cardapioId = await cardapioHojeId(supabase, igrejaId)
+  if (!cardapioId) return []
 
-  const { data: cardapio } = await supabase
-    .from("tab_cardapio_dia")
-    .select("id")
-    .eq("igreja_id", igrejaId)
-    .eq("data", hoje)
-    .single()
-
-  if (!cardapio) {
-    const { data: todos } = await supabase
-      .from("tab_itens")
-      .select("*")
-      .eq("igreja_id", igrejaId)
-      .eq("ativo", true)
-      .order("nome")
-    return todos ?? []
-  }
-
+  // !inner + filtro em tab_itens.ativo: um produto desativado no meio do
+  // dia (ex.: "acabou") some da venda mesmo se ainda estiver marcado no
+  // cardápio de hoje — sem isso ficava selecionável em Vendas mas
+  // escondido (e impossível de desmarcar) na tela de Cardápio.
   const { data: relacoes } = await supabase
     .from("tab_cardapio_dia_itens")
-    .select("item_id")
-    .eq("cardapio_id", cardapio.id)
+    .select("tab_itens!inner(*)")
+    .eq("cardapio_id", cardapioId)
+    .eq("tab_itens.ativo", true)
 
-  const ids = (relacoes ?? []).map((r) => r.item_id)
-  if (ids.length === 0) return []
-
-  const { data: produtos } = await supabase
-    .from("tab_itens")
-    .select("*")
-    .in("id", ids)
-    .order("nome")
-
-  return produtos ?? []
+  const produtos = (relacoes ?? []).map((r) => r.tab_itens as unknown as Item)
+  produtos.sort((a, b) => a.nome.localeCompare(b.nome))
+  return produtos
 }

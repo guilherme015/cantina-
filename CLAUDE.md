@@ -36,6 +36,19 @@ Isolamento de dados é por igreja (`igreja_id`), não por usuário (`user_id`) �
 - `supabase/migration-multi-igreja.sql` já foi aplicada no projeto Supabase real (29/09/2026) — ver checklist na issue #19.
 - Backlog conhecido, documentado e não bloqueante: hardening de baixo risco aceito por ora — `user_id` forjável no `WITH CHECK` das tabelas de negócio e FKs de tabelas filhas sem `igreja_id` (#21); `tab_fechamento_caixa.user_id` ainda em `ON DELETE CASCADE` (perde o fechamento e a trava do dia se a conta de quem fechou for excluída) (#23).
 
+## Cardápio do Dia
+
+Vendas só oferece produtos que estão no cardápio de hoje (`tab_cardapio_dia` + `tab_cardapio_dia_itens`) — sem cardápio configurado pra hoje, `listarItensCardapioHoje` retorna `[]` (nenhum fallback pra "mostrar todo o catálogo ativo"; isso já existiu e foi removido porque contradizia a própria ideia de "cardápio do dia"). A restrição é reforçada **no servidor**: `criarVenda` (`src/app/actions/vendas.ts`) rejeita qualquer `item_id` que não esteja no cardápio de hoje e ativo, mesmo que a tela mande — sem essa checagem, uma aba de Vendas esquecida aberta de um dia anterior (ou uma chamada direta à action) venderia qualquer coisa. `salvarCardapioHoje`/`copiarUltimoCardapio` (`src/app/actions/cardapio.ts`) filtram produto desativado (`tab_itens.ativo`) tanto na cópia quanto na listagem.
+- Backlog conhecido, não bloqueante: `salvarCardapioHoje` faz DELETE + INSERT (não atômico) — dois membros da mesma igreja salvando o cardápio de hoje ao mesmo tempo podem gerar a união das duas seleções em vez da que "venceu" por último.
+
+## Datas
+
+Use sempre `hojeBR()`/`dataBR()` (`src/lib/data-br.ts`, fuso `America/Sao_Paulo` explícito) pra qualquer "data de hoje" usada como filtro ou gravada no banco — nunca `new Date().toISOString().split("T")[0]`. Como o Brasil é UTC-3, das ~21h às 23h59 (horário de SP) o UTC já é o dia seguinte, então o corte cru pega a data errada bem no horário de pico de uma cantina. Já foi bug real em `cardapio.ts`, `vendas.ts` e no default do campo de data de Contas a Pagar — corrigidos, mas qualquer novo "hoje" no código precisa vir de `data-br.ts`, inclusive em client components (as funções não dependem do fuso da máquina, só do parâmetro `timeZone` explícito do `Intl.DateTimeFormat`).
+
+## Senha forte
+
+Critérios de senha (mínimo 8 caracteres, 1 maiúscula, 1 minúscula, 1 número, 1 caractere especial) vivem só em `src/lib/senha.ts` (`CRITERIOS_SENHA` + `senhaAtendeCriterios`) — é a mesma fonte usada pelo checklist visual (`PasswordChecklist`) e pela validação de verdade no servidor (`signup`/`redefinirSenha` em `src/app/actions/auth.ts`). Nunca duplique os critérios em outro lugar: o checklist só é confiável enquanto for exatamente o que o servidor aplica.
+
 ## Revisores automáticos
 
 Um hook Stop (`.claude/hooks/check-reviewers.sh`) checa o diff não commitado a cada turno e bloqueia o fim do turno se:

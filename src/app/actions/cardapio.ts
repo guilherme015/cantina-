@@ -4,10 +4,7 @@ import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { getIgrejaIdAtual } from "@/lib/igreja"
-
-function hoje() {
-  return new Date().toISOString().split("T")[0]
-}
+import { hojeBR } from "@/lib/data-br"
 
 export type CardapioHoje = {
   id: string
@@ -27,7 +24,7 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
     .from("tab_cardapio_dia")
     .select("id, data")
     .eq("igreja_id", igrejaId)
-    .eq("data", hoje())
+    .eq("data", hojeBR())
     .single()
 
   if (!cardapio) return null
@@ -52,7 +49,7 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
-  const data = hoje()
+  const data = hojeBR()
 
   let { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
@@ -72,6 +69,13 @@ export async function salvarCardapioHoje(itemIds: string[]) {
     cardapio = novo
   }
 
+  // Backlog conhecido, não bloqueante: delete+insert não é atômico. Se dois
+  // membros da mesma igreja salvarem o cardápio de hoje ao mesmo tempo com
+  // seleções diferentes, o resultado pode ser a união das duas em vez da
+  // que "venceu" por último — precisaria de uma função no banco (mesmo
+  // padrão de fechar_caixa) pra ser realmente atômico. Risco baixo (exige
+  // 2 pessoas editando no mesmo instante) e a correção é reversível (basta
+  // salvar de novo).
   await supabase
     .from("tab_cardapio_dia_itens")
     .delete()
@@ -86,4 +90,51 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   revalidatePath("/cadastros/cardapio")
   revalidatePath("/vendas")
   return { success: true }
+}
+
+// Sem cardápio configurado, Vendas não libera nenhum produto pra venda
+// (ver listarItensCardapioHoje em vendas.ts) — esse atalho existe pra
+// configurar o dia em 1 clique repetindo a última seleção salva, em vez de
+// forçar reconstruir a lista do zero todo dia.
+//
+// Busca o cardápio salvo mais recente ANTES de hoje, não especificamente
+// "ontem": a maioria das cantinas de igreja não abre todo dia (só domingo,
+// por exemplo), então "ontem" quase sempre estaria vazio.
+export async function copiarUltimoCardapio(): Promise<{ error?: string; success?: boolean; itemIds?: string[] }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: "Não autenticado" }
+
+  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
+  if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+
+  const { data: ultimoCardapio, error: errBusca } = await supabase
+    .from("tab_cardapio_dia")
+    .select("id")
+    .eq("igreja_id", igrejaId)
+    .lt("data", hojeBR())
+    .order("data", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (errBusca) return { error: mensagemDeErro(errBusca) }
+  if (!ultimoCardapio) return { error: "Nenhum cardápio salvo em dias anteriores." }
+
+  // !inner + ativo=true: não traz de volta produto desativado desde então
+  // (senão ele fica selecionado mas invisível — só aparecem os ativos na
+  // lista da tela de Cardápio — e impossível de desmarcar).
+  const { data: relacoes, error: errRelacoes } = await supabase
+    .from("tab_cardapio_dia_itens")
+    .select("item_id, tab_itens!inner(ativo)")
+    .eq("cardapio_id", ultimoCardapio.id)
+    .eq("tab_itens.ativo", true)
+
+  if (errRelacoes) return { error: mensagemDeErro(errRelacoes) }
+
+  const itemIds = (relacoes ?? []).map((r) => r.item_id)
+  if (itemIds.length === 0) return { error: "O último cardápio salvo estava vazio (ou os produtos foram desativados)." }
+
+  const resultado = await salvarCardapioHoje(itemIds)
+  if (resultado.error) return resultado
+  return { success: true, itemIds }
 }
