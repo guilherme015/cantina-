@@ -132,7 +132,7 @@ export async function criarVenda(dados: {
       igreja_id: igrejaId,
       data_hora: new Date().toISOString(),
     })
-    .select("id")
+    .select("id, numero_pedido")
     .single()
 
   if (errVenda) return { error: mensagemDeErro(errVenda) }
@@ -157,9 +157,11 @@ export async function criarVenda(dados: {
     return { error: mensagemDeErro(errItens) }
   }
 
+  // numero_pedido (numerado por igreja, ver CLAUDE.md) em vez de fatia do
+  // UUID — o UUID não tem nenhum significado pra quem opera o caixa.
   const descricao = dados.cliente
     ? `Venda para ${dados.cliente}`
-    : `Venda ${venda.id.slice(0, 8)}`
+    : `Pedido #${venda.numero_pedido}`
 
   if (dados.forma_pagamento !== "fiado") {
     const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
