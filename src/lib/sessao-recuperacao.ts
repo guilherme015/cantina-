@@ -25,9 +25,17 @@ export async function sessaoVeioDeRecuperacao(supabase: SupabaseServerClient): P
   // O GoTrue registra "recovery" só no fluxo PKCE (?code=), e "otp" no
   // fluxo token_hash+type=recovery — qual dos dois roda depende do
   // template de e-mail configurado no dashboard do Supabase, que não está
-  // versionado neste repo. Aceita os dois: este app não tem login por
-  // magic-link nem por OTP, então um "otp" recente só pode ter vindo do
-  // link de recuperação por e-mail.
+  // versionado neste repo. Aceita os dois.
+  //
+  // "otp" não é exclusivo de recuperação de senha: src/app/auth/confirm
+  // trata qualquer `type` que o Supabase mandar (confirmação de cadastro,
+  // magic link, convite, troca de e-mail — todos via verifyOtp, todos
+  // registram "otp"), então nos 30min depois de qualquer um desses links
+  // a checagem também passa. Não é uma escalação de privilégio (quem
+  // confirma o próprio cadastro já sabe a própria senha, não é uma
+  // conta alheia sendo tomada), mas é impreciso — o objetivo real aqui é
+  // só filtrar sessão comum de dia a dia, que nunca passou por nenhum
+  // verifyOtp.
   return amr.some(
     (a) => (a.method === "recovery" || a.method === "otp") && agora - a.timestamp <= JANELA_RECENTE_SEGUNDOS
   )
