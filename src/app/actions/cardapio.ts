@@ -11,7 +11,10 @@ export type CardapioHoje = {
   item_ids: string[]
 }
 
-export async function getCardapioHoje(): Promise<CardapioHoje | null> {
+// Genérica por data (#5) — getCardapioHoje/salvarCardapioHoje abaixo são só
+// atalhos pra data = hojeBR(), pra não obrigar quem já chamava sem data a
+// mudar.
+export async function getCardapioPorData(data: string): Promise<CardapioHoje | null> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user || !igrejaId) return null
 
@@ -19,7 +22,7 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
     .from("tab_cardapio_dia")
     .select("id, data")
     .eq("igreja_id", igrejaId)
-    .eq("data", hojeBR())
+    .eq("data", data)
     .single()
 
   if (!cardapio) return null
@@ -36,12 +39,14 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
   }
 }
 
-export async function salvarCardapioHoje(itemIds: string[]) {
+export async function getCardapioHoje(): Promise<CardapioHoje | null> {
+  return getCardapioPorData(hojeBR())
+}
+
+export async function salvarCardapioPorData(data: string, itemIds: string[]) {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
-
-  const data = hojeBR()
 
   let { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
@@ -82,6 +87,45 @@ export async function salvarCardapioHoje(itemIds: string[]) {
   revalidatePath("/cadastros/cardapio")
   revalidatePath("/vendas")
   return { success: true }
+}
+
+export async function salvarCardapioHoje(itemIds: string[]) {
+  return salvarCardapioPorData(hojeBR(), itemIds)
+}
+
+export type CardapioHistoricoItem = {
+  data: string
+  totalItens: number
+}
+
+// Lista os cardápios já salvos até hoje (mais recente primeiro), pro
+// seletor de histórico da navegação por data (#5) — sem isso, achar um
+// cardápio salvo há 2 semanas significa clicar "dia anterior" 14 vezes.
+export async function listarHistoricoCardapios(): Promise<CardapioHistoricoItem[]> {
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
+
+  const { data: cardapios } = await supabase
+    .from("tab_cardapio_dia")
+    .select("id, data")
+    .eq("igreja_id", igrejaId)
+    .lte("data", hojeBR())
+    .order("data", { ascending: false })
+    .limit(60)
+
+  if (!cardapios || cardapios.length === 0) return []
+
+  const { data: relacoes } = await supabase
+    .from("tab_cardapio_dia_itens")
+    .select("cardapio_id")
+    .in("cardapio_id", cardapios.map((c) => c.id))
+
+  const totalPorCardapio = new Map<string, number>()
+  for (const r of relacoes ?? []) {
+    totalPorCardapio.set(r.cardapio_id, (totalPorCardapio.get(r.cardapio_id) ?? 0) + 1)
+  }
+
+  return cardapios.map((c) => ({ data: c.data, totalItens: totalPorCardapio.get(c.id) ?? 0 }))
 }
 
 // Sem cardápio configurado, Vendas não libera nenhum produto pra venda
