@@ -49,6 +49,11 @@ Use sempre `hojeBR()`/`dataBR()` (`src/lib/data-br.ts`, fuso `America/Sao_Paulo`
 
 Critérios de senha (mínimo 8 caracteres, 1 maiúscula, 1 minúscula, 1 número, 1 caractere especial) vivem só em `src/lib/senha.ts` (`CRITERIOS_SENHA` + `senhaAtendeCriterios`) — é a mesma fonte usada pelo checklist visual (`PasswordChecklist`) e pela validação de verdade no servidor (`signup`/`redefinirSenha` em `src/app/actions/auth.ts`). Nunca duplique os critérios em outro lugar: o checklist só é confiável enquanto for exatamente o que o servidor aplica.
 
+## Recuperação de senha
+
+`/redefinir-senha` só pode ser acessada por uma sessão que veio de verdade do link de recuperação por e-mail — `sessaoVeioDeRecuperacao()` (`src/lib/sessao-recuperacao.ts`) confere isso lendo o claim `amr` (authentication method reference) do JWT via `getClaims()`, com janela de 30min (o `amr` fica gravado na sessão até ela expirar — até 400 dias — então sem checar o timestamp uma sessão antiga que passou pelo fluxo continuaria liberada pra sempre). A checagem roda **tanto na página quanto na server action `redefinirSenha`** — a action é a fronteira de verdade, porque é um endpoint POST próprio, chamável direto sem passar pela página.
+- Limitação conhecida, fora do alcance deste código: alguém com acesso ao console do navegador de uma sessão já logada ainda consegue ler o cookie (não é `httpOnly`, por design do `@supabase/ssr` — o client do browser precisa ler a sessão) e chamar a API do Supabase Auth direto, ignorando o app inteiro. Só se fecha com `GOTRUE_SECURITY_UPDATE_PASSWORD_REQUIRE_CURRENT_PASSWORD` do lado do GoTrue (se exposto no dashboard do projeto).
+
 ## Revisores automáticos
 
 Um hook Stop (`.claude/hooks/check-reviewers.sh`) checa o diff não commitado a cada turno e bloqueia o fim do turno se:
