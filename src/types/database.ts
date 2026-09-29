@@ -116,11 +116,13 @@ export interface Database {
           id: string
           cardapio_id: string
           item_id: string
+          igreja_id: string
         }
         Insert: {
           id?: string
           cardapio_id: string
           item_id: string
+          igreja_id: string
         }
         Update: {
           id?: string
@@ -130,17 +132,17 @@ export interface Database {
         Relationships: [
           {
             foreignKeyName: "tab_cardapio_dia_itens_cardapio_id_fkey"
-            columns: ["cardapio_id"]
+            columns: ["cardapio_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_cardapio_dia"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
           {
             foreignKeyName: "tab_cardapio_dia_itens_item_id_fkey"
-            columns: ["item_id"]
+            columns: ["item_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_itens"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
         ]
       }
@@ -186,6 +188,7 @@ export interface Database {
           id: string
           venda_id: string
           item_id: string
+          igreja_id: string
           quantidade: number
           valor_unitario: number
           subtotal: number
@@ -194,6 +197,7 @@ export interface Database {
           id?: string
           venda_id: string
           item_id: string
+          igreja_id: string
           quantidade: number
           valor_unitario: number
           subtotal: number
@@ -207,17 +211,17 @@ export interface Database {
         Relationships: [
           {
             foreignKeyName: "tab_vendas_itens_item_id_fkey"
-            columns: ["item_id"]
+            columns: ["item_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_itens"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
           {
             foreignKeyName: "tab_vendas_itens_venda_id_fkey"
-            columns: ["venda_id"]
+            columns: ["venda_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_vendas"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
         ]
       }
@@ -259,10 +263,10 @@ export interface Database {
         Relationships: [
           {
             foreignKeyName: "tab_extrato_financeiro_venda_id_fkey"
-            columns: ["venda_id"]
+            columns: ["venda_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_vendas"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
           {
             foreignKeyName: "tab_extrato_financeiro_conta_pagar_id_fkey"
@@ -316,10 +320,10 @@ export interface Database {
         Relationships: [
           {
             foreignKeyName: "tab_contas_receber_venda_id_fkey"
-            columns: ["venda_id"]
+            columns: ["venda_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_vendas"
-            referencedColumns: ["id"]
+            referencedColumns: ["id", "igreja_id"]
           },
         ]
       }
