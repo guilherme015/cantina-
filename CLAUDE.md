@@ -33,7 +33,7 @@ Isolamento de dados é por igreja (`igreja_id`), não por usuário (`user_id`) �
 - `numero_pedido` em `tab_vendas` é numerado por igreja via trigger (`numerar_venda_por_igreja`), não por uma sequência global — evita revelar volume de vendas de outras igrejas.
 - Toda função `SECURITY DEFINER` usa `SET search_path = ''` com nomes totalmente qualificados (`public.tabela`) — sem isso, uma tabela temporária com o mesmo nome de uma tabela real sequestra o INSERT/SELECT (mesma classe do CVE-2018-1058).
 - Server actions resolvem a igreja do usuário logado via `getIgrejaIdAtual()` (`src/lib/igreja.ts`) e filtram por `igreja_id` — `user_id` nas tabelas de negócio continua existindo só como registro de "quem fez", não é mais usado para isolamento.
-- **Passo manual pendente:** aplicar `supabase/migration-multi-igreja.sql` no SQL Editor do projeto Supabase real — ver checklist na issue #19. Sem isso o app não funciona em produção (código já espera `igreja_id`).
+- `supabase/migration-multi-igreja.sql` já foi aplicada no projeto Supabase real (29/09/2026) — ver checklist na issue #19.
 - Backlog conhecido, documentado e não bloqueante: hardening de baixo risco aceito por ora — `user_id` forjável no `WITH CHECK` das tabelas de negócio e FKs de tabelas filhas sem `igreja_id` (#21); `tab_fechamento_caixa.user_id` ainda em `ON DELETE CASCADE` (perde o fechamento e a trava do dia se a conta de quem fechou for excluída) (#23).
 
 ## Revisores automáticos

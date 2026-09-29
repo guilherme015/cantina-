@@ -301,6 +301,14 @@ CREATE TRIGGER trg_criar_igreja_no_cadastro
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.criar_igreja_no_cadastro();
 
+-- Sem grant de propósito — ver comentário completo em schema.sql: o
+-- Supabase concede EXECUTE a PUBLIC por default privilege do schema
+-- public, expondo essa SECURITY DEFINER como RPC pública mesmo sem
+-- GRANT explícito. O trigger continua funcionando sem esses grants.
+REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM anon;
+REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM authenticated;
+
 -- ============================================================
 -- 7. Função private.chave_lock_fechamento + trigger de proteção do
 --    extrato + RPC fechar_caixa (lock exclusivo + cálculo atômico).
@@ -319,6 +327,7 @@ CREATE OR REPLACE FUNCTION private.chave_lock_fechamento(p_igreja_id UUID, p_dat
 RETURNS BIGINT
 LANGUAGE sql
 IMMUTABLE
+SET search_path = ''
 AS $$
   SELECT hashtextextended(p_igreja_id::text, (p_data - DATE '2000-01-01'))
 $$;
