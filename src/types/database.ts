@@ -359,7 +359,7 @@ export interface Database {
           valor_informado: number
           diferenca: number
           observacoes: string | null
-          user_id: string
+          user_id: string | null
           igreja_id: string
         }
         Insert: {
