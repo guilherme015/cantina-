@@ -76,11 +76,13 @@ export function ContasReceberClient({ contas }: Props) {
   }
 
   function handleExcluir(id: string) {
-    if (!confirm("Excluir este lançamento? A venda de origem (se houver) não será cancelada.")) return
+    if (!confirm("Excluir este lançamento? Se o valor ainda for o mesmo da venda fiado original, a venda de origem também será cancelada. Se você já editou o valor, só esta conta será removida — a venda de origem continua em aberto.")) return
     startTransition(async () => {
       const result = await excluirContaReceber(id)
       if (result.error) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
+      } else if (result.vendaCancelada) {
+        toast({ title: "Lançamento excluído e venda de origem cancelada!", variant: "success" })
       } else {
         toast({ title: "Lançamento excluído!", variant: "success" })
       }
