@@ -221,13 +221,24 @@ export async function cancelarVenda(id: string) {
     }
   }
 
-  const { error } = await supabase
+  // .eq("status", venda.status) torna esse update atômico contra uma
+  // corrida com baixarContaReceber: sem essa trava, cancelar e receber o
+  // fiado da mesma venda ao mesmo tempo pode fazer este cancelamento
+  // sobrescrever um "pago" já confirmado e apagar do extrato (linhas
+  // abaixo) a entrada que o recebimento acabou de lançar — a venda ficaria
+  // "cancelado" com o dinheiro já contado como recebido em outro lugar.
+  const { data: vendaCancelada, error } = await supabase
     .from("tab_vendas")
     .update({ status: "cancelado" })
     .eq("id", id)
     .eq("igreja_id", igrejaId)
+    .eq("status", venda.status)
+    .select("id")
 
   if (error) return { error: mensagemDeErro(error) }
+  if (!vendaCancelada || vendaCancelada.length === 0) {
+    return { error: "Esta venda foi atualizada em outra operação (provavelmente o fiado acabou de ser recebido). Atualize a página." }
+  }
 
   // Estorna os lançamentos financeiros ligados à venda.
   const { error: errExtrato } = await supabase

@@ -309,6 +309,61 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
   }
 
   const c = conta as ContaReceber
+
+  // Sincroniza o status da venda de origem: sem isso, a tela de Vendas
+  // continua mostrando "Fiado" pra sempre mesmo depois do cliente pagar,
+  // já que criarVenda grava status "pendente" e nada mais atualizava esse
+  // campo depois.
+  //
+  // .neq("status", "cancelado") torna esse update atômico contra uma
+  // corrida com cancelarVenda: sem essa trava, cancelar e receber a mesma
+  // venda ao mesmo tempo pode deixar a venda "pago" sem entrada no extrato
+  // (o cancelamento apaga o lançamento que este fluxo acabou de criar) — a
+  // checagem de venda cancelada mais acima (linhas ~273-285) só cobre o
+  // instante da leitura, não protege contra um cancelamento concorrente.
+  //
+  // É "!= cancelado" e não "== pendente" de propósito: se este mesmo bloco
+  // já rodou uma vez com sucesso (venda virou "pago") e o rollback do
+  // errExtrato logo abaixo falhar silenciosamente ao tentar voltar pra
+  // "pendente", uma nova tentativa de receber com "== pendente" nunca mais
+  // bateria — o fiado ficaria travado pra sempre com esse erro. "pago" já
+  // sendo o valor é só um no-op idempotente.
+  if (c.venda_id) {
+    const { data: vendaAtualizada, error: errVenda } = await supabase
+      .from("tab_vendas")
+      .update({ status: "pago" })
+      .eq("id", c.venda_id)
+      .eq("igreja_id", igrejaId)
+      .neq("status", "cancelado")
+      .select("id")
+
+    if (errVenda) {
+      await supabase
+        .from("tab_contas_receber")
+        .update({ pago: false, data_baixa: null, forma_pagamento_baixa: null })
+        .eq("id", id)
+        .eq("igreja_id", igrejaId)
+      return { error: mensagemDeErro(errVenda) }
+    }
+    if (!vendaAtualizada || vendaAtualizada.length === 0) {
+      // Só chega aqui se a venda estiver "cancelado" (única condição que o
+      // neq acima rejeita) — ou seja, cancelarVenda venceu a corrida. Ela
+      // tentou apagar esta conta a receber, mas nesse instante `pago` ainda
+      // não tinha virado true (update lá em cima ainda não tinha commitado
+      // no momento do DELETE .eq("pago", false) de cancelarVenda), então a
+      // conta sobreviveu. Apaga agora em vez de deixar um fiado "em
+      // aberto" (e travado, porque venda cancelada nunca pode ser
+      // recebida) de uma venda que já foi cancelada.
+      await supabase
+        .from("tab_contas_receber")
+        .delete()
+        .eq("id", id)
+        .eq("igreja_id", igrejaId)
+        .eq("pago", true)
+      return { error: "A venda desta conta foi cancelada. Não é possível receber." }
+    }
+  }
+
   const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
     tipo_movimentacao: "entrada" as const,
     forma_pagamento: formaPagamento as "dinheiro" | "pix" | "cartao" | "fiado",
@@ -322,8 +377,12 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
 
   if (errExtrato) {
     // Mesmo caso do pagarConta: o caixa pode ter sido fechado por outro
-    // membro entre o UPDATE acima e este insert — desfaz a baixa em vez de
-    // deixar a conta recebida sem entrada no extrato.
+    // membro entre o UPDATE acima e este insert — desfaz a baixa (e o
+    // status da venda) em vez de deixar a conta recebida sem entrada no
+    // extrato.
+    if (c.venda_id) {
+      await supabase.from("tab_vendas").update({ status: "pendente" }).eq("id", c.venda_id).eq("igreja_id", igrejaId)
+    }
     await supabase
       .from("tab_contas_receber")
       .update({ pago: false, data_baixa: null, forma_pagamento_baixa: null })
@@ -335,6 +394,7 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
   revalidatePath("/financeiro/contas-receber")
   revalidatePath("/financeiro/extrato")
   revalidatePath("/financeiro/fechamento")
+  revalidatePath("/vendas")
   return { success: true }
 }
 

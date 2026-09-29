@@ -65,6 +65,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
   const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>("dinheiro")
   const [desconto, setDesconto] = useState(0)
   const [isPending, startTransition] = useTransition()
+  const [filtroForma, setFiltroForma] = useState<FormaPagamento | "todos">("todos")
 
   const totalBruto = carrinho.reduce((s, i) => s + i.quantidade * i.valor_unitario, 0)
   const totalLiquido = Math.max(0, totalBruto - desconto)
@@ -137,16 +138,37 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
     })
   }
 
-  const totalDia = vendas
-    .filter((v) => v.status === "pago")
+  // Total vendido no dia independe da forma de pagamento — inclui fiado
+  // ainda pendente. Só venda cancelada não conta como venda de verdade.
+  const vendasFiltradas = filtroForma === "todos"
+    ? vendas
+    : vendas.filter((v) => v.forma_pagamento === filtroForma)
+
+  const totalDia = vendasFiltradas
+    .filter((v) => v.status !== "cancelado")
     .reduce((s, v) => s + v.total, 0)
 
   return (
     <>
-      <div className="flex justify-between items-center mb-4">
-        <div className="bg-white border border-[var(--border)] rounded-md px-4 py-2">
-          <p className="text-xs text-[var(--muted-foreground)]">Total do dia</p>
-          <p className="text-lg font-bold text-green-600">{formatCurrency(totalDia)}</p>
+      <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="bg-white border border-[var(--border)] rounded-md px-4 py-2">
+            <p className="text-xs text-[var(--muted-foreground)]">
+              {filtroForma === "todos" ? "Total do dia" : `Total em ${FORMAS_PAGAMENTO.find((f) => f.value === filtroForma)?.label}`}
+            </p>
+            <p className="text-lg font-bold text-green-600">{formatCurrency(totalDia)}</p>
+          </div>
+          <Select value={filtroForma} onValueChange={(v) => setFiltroForma(v as FormaPagamento | "todos")}>
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="todos">Todas as formas</SelectItem>
+              {FORMAS_PAGAMENTO.map((f) => (
+                <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <Button size="lg" className="gap-2" onClick={abrirNova}>
           <Plus className="w-5 h-5" />
@@ -155,18 +177,20 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
       </div>
 
       <div className="space-y-3">
-        {vendas.length === 0 ? (
+        {vendasFiltradas.length === 0 ? (
           <Card>
             <CardContent className="p-6">
               <div className="flex items-center justify-center flex-col gap-3 py-12 text-[var(--muted-foreground)]">
                 <ShoppingCart className="w-12 h-12 opacity-30" />
-                <p className="text-sm">Nenhuma venda registrada hoje.</p>
+                <p className="text-sm">
+                  {vendas.length === 0 ? "Nenhuma venda registrada hoje." : "Nenhuma venda com essa forma de pagamento hoje."}
+                </p>
                 <p className="text-xs">Clique em &quot;Nova Venda&quot; para começar.</p>
               </div>
             </CardContent>
           </Card>
         ) : (
-          vendas.map((v) => (
+          vendasFiltradas.map((v) => (
             <Card key={v.id}>
               <CardContent className="p-4">
                 <div className="flex items-start justify-between gap-4">
