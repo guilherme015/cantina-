@@ -380,7 +380,106 @@ REVOKE ALL ON FUNCTION public.fechar_caixa(DATE, NUMERIC, NUMERIC, TEXT) FROM an
 GRANT EXECUTE ON FUNCTION public.fechar_caixa(DATE, NUMERIC, NUMERIC, TEXT) TO authenticated;
 
 -- ============================================================
--- 8. Índices
+-- 8. Tabela tab_reaberturas_caixa + RPC reabrir_caixa
+--    (ver comentário completo em schema.sql — auditoria obrigatória
+--    antes de apagar um fechamento, mesmo padrão de lock e de
+--    SECURITY DEFINER de fechar_caixa)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tab_reaberturas_caixa (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
+  -- Nullable + SET NULL (não CASCADE): ver comentário completo em
+  -- schema.sql — o registro de auditoria não pode desaparecer se a
+  -- conta de quem fechou/reabriu for excluída no futuro.
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  fechamento_id UUID NOT NULL,
+  fechado_por UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  fechado_em TIMESTAMPTZ NOT NULL,
+  data DATE NOT NULL,
+  justificativa TEXT NOT NULL CHECK (btrim(justificativa) <> ''),
+  saldo_inicial NUMERIC(10, 2) NOT NULL,
+  entradas_dinheiro NUMERIC(10, 2) NOT NULL,
+  entradas_pix NUMERIC(10, 2) NOT NULL,
+  entradas_cartao NUMERIC(10, 2) NOT NULL,
+  total_saidas NUMERIC(10, 2) NOT NULL,
+  valor_calculado NUMERIC(10, 2) NOT NULL,
+  valor_informado NUMERIC(10, 2) NOT NULL,
+  diferenca NUMERIC(10, 2) NOT NULL,
+  observacoes TEXT
+);
+
+ALTER TABLE tab_reaberturas_caixa ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "membros_igreja_reaberturas_select" ON tab_reaberturas_caixa;
+CREATE POLICY "membros_igreja_reaberturas_select" ON tab_reaberturas_caixa
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+
+-- Reforço defensivo — ver comentário completo em schema.sql (não existe
+-- policy de escrita pra nenhuma das duas, então isso não muda nada hoje;
+-- só evita que uma policy futura adicionada por engano reabra escrita
+-- direta).
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON tab_reaberturas_caixa FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON tab_fechamento_caixa FROM anon, authenticated;
+
+-- Só reabre o dia de HOJE — ver comentário completo em schema.sql
+-- (reabrir um dia passado o deixaria aberto pra sempre, já que a tela
+-- de fechamento só sabe fechar "hoje").
+CREATE OR REPLACE FUNCTION public.reabrir_caixa(
+  p_data DATE,
+  p_justificativa TEXT
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_igreja_id UUID;
+  v_fechamento public.tab_fechamento_caixa;
+BEGIN
+  IF p_justificativa IS NULL OR btrim(p_justificativa) = '' THEN
+    RAISE EXCEPTION 'Informe a justificativa para reabrir o caixa.';
+  END IF;
+
+  IF p_data <> (now() AT TIME ZONE 'America/Sao_Paulo')::date THEN
+    RAISE EXCEPTION 'Só é possível reabrir o caixa do dia de hoje.';
+  END IF;
+
+  SELECT igreja_id INTO v_igreja_id FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  IF v_igreja_id IS NULL THEN
+    RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(private.chave_lock_fechamento(v_igreja_id, p_data));
+
+  SELECT * INTO v_fechamento FROM public.tab_fechamento_caixa WHERE igreja_id = v_igreja_id AND data = p_data;
+  IF v_fechamento IS NULL THEN
+    RAISE EXCEPTION 'Este dia não está fechado.';
+  END IF;
+
+  INSERT INTO public.tab_reaberturas_caixa (
+    igreja_id, user_id, fechamento_id, fechado_por, fechado_em, data, justificativa,
+    saldo_inicial, entradas_dinheiro, entradas_pix, entradas_cartao, total_saidas,
+    valor_calculado, valor_informado, diferenca, observacoes
+  ) VALUES (
+    v_igreja_id, auth.uid(), v_fechamento.id, v_fechamento.user_id, v_fechamento.created_at,
+    p_data, btrim(p_justificativa), v_fechamento.saldo_inicial,
+    v_fechamento.entradas_dinheiro, v_fechamento.entradas_pix, v_fechamento.entradas_cartao,
+    v_fechamento.total_saidas, v_fechamento.valor_calculado, v_fechamento.valor_informado,
+    v_fechamento.diferenca, v_fechamento.observacoes
+  );
+
+  DELETE FROM public.tab_fechamento_caixa WHERE igreja_id = v_igreja_id AND data = p_data;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.reabrir_caixa(DATE, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.reabrir_caixa(DATE, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.reabrir_caixa(DATE, TEXT) TO authenticated;
+
+-- ============================================================
+-- 9. Índices
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_igreja_membros_user_id ON igreja_membros(user_id);
 CREATE INDEX IF NOT EXISTS idx_igreja_membros_igreja_id ON igreja_membros(igreja_id);
@@ -391,6 +490,7 @@ CREATE INDEX IF NOT EXISTS idx_tab_extrato_igreja_id ON tab_extrato_financeiro(i
 CREATE INDEX IF NOT EXISTS idx_tab_contas_receber_igreja_id ON tab_contas_receber(igreja_id);
 CREATE INDEX IF NOT EXISTS idx_tab_contas_pagar_igreja_id ON tab_contas_pagar(igreja_id);
 CREATE INDEX IF NOT EXISTS idx_tab_fechamento_igreja_data ON tab_fechamento_caixa(igreja_id, data);
+CREATE INDEX IF NOT EXISTS idx_tab_reaberturas_igreja_id ON tab_reaberturas_caixa(igreja_id);
 
 -- Índices antigos por user_id (idx_tab_itens_user_id etc.) continuam
 -- existindo e não têm mais uso para RLS, mas não fazem mal — dropar
