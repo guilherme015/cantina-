@@ -171,7 +171,12 @@ CREATE TABLE IF NOT EXISTS tab_contas_pagar (
 CREATE TABLE IF NOT EXISTS tab_fechamento_caixa (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- SET NULL, não CASCADE: excluir a conta de quem fechou o caixa não pode
+  -- apagar o fechamento em si — perderia a trava do dia fechado (o trigger
+  -- em tab_extrato_financeiro rejeita lançamento no dia se existe linha
+  -- aqui) e todo o auditoria já registrada, sem passar pela RPC
+  -- reabrir_caixa. Mesmo padrão já usado em tab_reaberturas_caixa (#20).
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
   data DATE NOT NULL,
   saldo_inicial NUMERIC(10, 2) NOT NULL DEFAULT 0 CHECK (saldo_inicial >= 0),
