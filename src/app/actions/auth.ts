@@ -124,5 +124,11 @@ export async function redefinirSenha(formData: FormData) {
     redirect("/redefinir-senha?error=erro_generico")
   }
 
-  redirect("/vendas")
+  // Encerra a sessão de recuperação em vez de seguir logado: fecha a janela
+  // residual do fix da issue #39 (essa mesma sessão, com o token de
+  // recuperação, poderia voltar em /redefinir-senha e trocar a senha de
+  // novo enquanto durasse) e garante que só quem sabe a senha nova
+  // consegue entrar a partir daqui.
+  await supabase.auth.signOut()
+  redirect("/login?senha_alterada=1")
 }

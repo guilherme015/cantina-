@@ -9,6 +9,21 @@ interface RedefinirSenhaProps {
   searchParams: Promise<{ error?: string }>
 }
 
+// Lê só o campo `amr` do payload do JWT — não precisa validar assinatura
+// aqui porque o token já veio de uma sessão validada por getUser() acima
+// (lido do cookie httponly gravado pelo nosso próprio client Supabase, não
+// de entrada do usuário).
+function decodeAmr(accessToken: string): string[] {
+  try {
+    const payload = accessToken.split(".")[1]
+    const json = Buffer.from(payload, "base64url").toString("utf-8")
+    const claims = JSON.parse(json) as { amr?: { method: string }[] }
+    return (claims.amr ?? []).map((a) => a.method)
+  } catch {
+    return []
+  }
+}
+
 const errorMessages: Record<string, string> = {
   senha_fraca: "A senha não atende aos critérios de segurança (mínimo 8 caracteres, maiúscula, minúscula, número e caractere especial).",
   senhas_diferentes: "As senhas não conferem. Digite a mesma senha nos dois campos.",
@@ -19,10 +34,25 @@ const errorMessages: Record<string, string> = {
 export default async function RedefinirSenhaPage({ searchParams }: RedefinirSenhaProps) {
   const { error } = await searchParams
 
-  // Só chega aqui quem veio do link de recuperação (com sessão criada).
+  // Só chega aqui quem veio do link de recuperação — getUser() valida a
+  // sessão contra o servidor do Supabase (não só lê o cookie).
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
+    redirect("/login?error=link_invalido")
+  }
+
+  // getUser() garante que a sessão é válida, mas não que veio do link de
+  // recuperação — qualquer usuário logado normalmente também passaria
+  // (issue #39: alguém com acesso breve a um dispositivo compartilhado já
+  // logado conseguia abrir esta página direto pela URL e trocar a senha
+  // sem saber a atual, tomando a conta). O GoTrue registra no token de
+  // acesso (claim `amr`, authentication method reference) como a sessão
+  // foi autenticada — pro link de recuperação, o método é "recovery".
+  // Confere isso aqui em vez de confiar só em existir uma sessão.
+  const { data: { session } } = await supabase.auth.getSession()
+  const amr = session ? decodeAmr(session.access_token) : []
+  if (!amr.includes("recovery")) {
     redirect("/login?error=link_invalido")
   }
 
