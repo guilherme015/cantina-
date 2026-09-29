@@ -211,7 +211,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <p className="font-semibold text-sm">
-                        {v.cliente || "Venda avulsa"}
+                        #{v.numero_pedido} · {v.cliente || "Venda avulsa"}
                       </p>
                       <Badge variant={STATUS_VARIANT[v.status] ?? "secondary"}>
                         {STATUS_LABEL[v.status] ?? v.status}
