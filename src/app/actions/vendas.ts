@@ -212,14 +212,14 @@ export async function criarVenda(dados: {
   return { success: true }
 }
 
-export async function cancelarVenda(id: string) {
+export async function cancelarVenda(id: string): Promise<{ error?: string; success?: boolean }> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: venda } = await supabase
     .from("tab_vendas")
-    .select("id, status, forma_pagamento, data_hora")
+    .select("id, status, forma_pagamento, data_hora, total, cliente")
     .eq("id", id)
     .eq("igreja_id", igrejaId)
     .single()
@@ -295,12 +295,55 @@ export async function cancelarVenda(id: string) {
     return { error: "O caixa foi fechado enquanto a venda era cancelada. Tente novamente." }
   }
 
-  await supabase
+  // #13: só apaga a conta a receber ligada se ela ainda representa o mesmo
+  // VALOR que esta venda registrou (comparação só por valor, não por
+  // cliente — corrigir o nome não muda de quem é o dinheiro) — senão
+  // dinheiro "juntado" aqui (ex.: editar de R$20 pra R$30 pra incluir
+  // consumo de outro dia) seria apagado junto, mesmo sem relação com esta
+  // venda. Se o valor foi editado, desvincula (venda_id = null) em vez de
+  // apagar: a dívida sobrevive como uma conta independente, sem o que a
+  // manter presa a uma venda cancelada (baixarContaReceber bloqueia receber
+  // fiado cuja venda de origem foi cancelada).
+  const { data: contaLigada } = await supabase
     .from("tab_contas_receber")
-    .delete()
+    .select("id, valor_devido")
     .eq("venda_id", id)
     .eq("igreja_id", igrejaId)
     .eq("pago", false)
+    .maybeSingle()
+
+  if (contaLigada) {
+    // O DELETE repete a comparação de valor na própria condição (em vez de
+    // confiar só na leitura acima) — sem isso, uma edição de valor entre o
+    // SELECT e o DELETE (outro membro editando a mesma conta nesse
+    // instante) apagaria dinheiro que não tem mais relação com esta venda.
+    // 0 linhas apagadas quer dizer "o valor mudou desde a leitura": cai no
+    // desvincula, que é sempre seguro (nunca perde dinheiro).
+    const valorCentavos = Math.round(contaLigada.valor_devido * 100)
+    const naoFoiEditada = Math.round(venda.total * 100) === valorCentavos
+
+    let apagou = false
+    if (naoFoiEditada) {
+      const { data: linhasApagadas } = await supabase
+        .from("tab_contas_receber")
+        .delete()
+        .eq("id", contaLigada.id)
+        .eq("igreja_id", igrejaId)
+        .eq("pago", false)
+        .eq("valor_devido", contaLigada.valor_devido)
+        .select("id")
+      apagou = !!linhasApagadas && linhasApagadas.length > 0
+    }
+
+    if (!apagou) {
+      await supabase
+        .from("tab_contas_receber")
+        .update({ venda_id: null })
+        .eq("id", contaLigada.id)
+        .eq("igreja_id", igrejaId)
+        .eq("pago", false)
+    }
+  }
 
   revalidatePath("/vendas")
   revalidatePath("/financeiro/extrato")

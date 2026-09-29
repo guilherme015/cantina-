@@ -301,6 +301,7 @@ export interface Database {
           pago?: boolean
           data_baixa?: string | null
           forma_pagamento_baixa?: string | null
+          venda_id?: string | null
         }
         Relationships: [
           {
