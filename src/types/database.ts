@@ -231,6 +231,7 @@ export interface Database {
           valor: number
           descricao: string
           venda_id: string | null
+          conta_pagar_id: string | null
           user_id: string
           igreja_id: string
         }
@@ -243,6 +244,7 @@ export interface Database {
           valor: number
           descricao: string
           venda_id?: string | null
+          conta_pagar_id?: string | null
           user_id: string
           igreja_id: string
         }
@@ -252,6 +254,7 @@ export interface Database {
           forma_pagamento?: "dinheiro" | "pix" | "cartao" | "fiado"
           valor?: number
           descricao?: string
+          conta_pagar_id?: string | null
         }
         Relationships: [
           {
@@ -260,6 +263,13 @@ export interface Database {
             isOneToOne: false
             referencedRelation: "tab_vendas"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tab_extrato_financeiro_conta_pagar_id_fkey"
+            columns: ["conta_pagar_id", "igreja_id"]
+            isOneToOne: false
+            referencedRelation: "tab_contas_pagar"
+            referencedColumns: ["id", "igreja_id"]
           },
         ]
       }
