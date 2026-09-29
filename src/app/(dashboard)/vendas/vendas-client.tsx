@@ -19,7 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Plus, ShoppingCart, Minus, CheckCircle } from "lucide-react"
+import { Plus, ShoppingCart, Minus, CheckCircle, UtensilsCrossed } from "lucide-react"
+import Link from "next/link"
 import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { criarVenda, cancelarVenda } from "@/app/actions/vendas"
 import type { VendaComItens, ItemVenda } from "@/app/actions/vendas"
@@ -150,6 +151,19 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
 
   return (
     <>
+      {itensDisponiveis.length === 0 && (
+        <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+          <UtensilsCrossed className="w-5 h-5 shrink-0" />
+          <span>
+            Nenhum produto no cardápio de hoje — as vendas ficam bloqueadas até você{" "}
+            <Link href="/cadastros/cardapio" className="font-semibold underline">
+              configurar o cardápio do dia
+            </Link>
+            .
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="bg-white border border-[var(--border)] rounded-md px-4 py-2">
@@ -277,7 +291,11 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
               <Label className="mb-2 block">Produtos</Label>
               {itensDisponiveis.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)] py-4 text-center">
-                  Nenhum produto disponível. Configure o cardápio do dia primeiro.
+                  Nenhum produto disponível.{" "}
+                  <Link href="/cadastros/cardapio" className="text-[var(--primary)] underline">
+                    Configure o cardápio do dia
+                  </Link>{" "}
+                  primeiro.
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-2">

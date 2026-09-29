@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Plus, ArrowUpCircle, CheckCircle, Pencil, Trash2 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
+import { hojeBR } from "@/lib/data-br"
 import { criarContaPagar, pagarConta, editarContaPagar, excluirContaPagar } from "@/app/actions/financeiro"
 import { toast } from "@/hooks/use-toast"
 import type { ContaPagar } from "@/types/database"
@@ -198,7 +199,7 @@ export function ContasPagarClient({ contas }: Props) {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="data">Data *</Label>
-                <Input id="data" name="data" type="date" defaultValue={new Date().toISOString().split("T")[0]} required />
+                <Input id="data" name="data" type="date" defaultValue={hojeBR()} required />
               </div>
             </div>
             <div className="space-y-2">

@@ -1,6 +1,8 @@
 import Link from "next/link"
 import { login, signup } from "@/app/actions/auth"
 import { UtensilsCrossed } from "lucide-react"
+import { PasswordInput } from "@/components/ui/password-input"
+import { PasswordFieldChecklist } from "@/components/ui/password-field-checklist"
 
 interface LoginPageProps {
   searchParams: Promise<{ error?: string }>
@@ -11,7 +13,7 @@ const errorMessages: Record<string, string> = {
   erro_cadastro: "Erro ao criar conta. Tente com outro e-mail.",
   email_ja_cadastrado:
     "Este e-mail já possui uma conta. Faça login acima ou use “Esqueceu a senha?” para recuperá-la.",
-  senha_fraca: "A senha é muito fraca. Use pelo menos 6 caracteres.",
+  senha_fraca: "A senha não atende aos critérios de segurança (mínimo 8 caracteres, maiúscula, minúscula, número e caractere especial).",
   link_invalido: "O link de recuperação é inválido ou expirou. Solicite um novo.",
   nome_igreja_obrigatorio: "Informe o nome da sua igreja para criar a conta.",
 }
@@ -71,14 +73,13 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               >
                 Senha
               </label>
-              <input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 required
                 autoComplete="current-password"
                 placeholder="••••••••"
-                className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full h-11"
               />
             </div>
 
@@ -128,14 +129,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               placeholder="seu@email.com"
               className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
             />
-            <input
-              name="password"
-              type="password"
-              required
-              autoComplete="new-password"
-              placeholder="Crie uma senha (mín. 6 caracteres)"
-              className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-            />
+            <PasswordFieldChecklist name="password" placeholder="Crie uma senha" />
             <button
               type="submit"
               className="w-full h-11 rounded-lg border border-[var(--primary)] text-[var(--primary)] text-sm font-semibold hover:bg-[var(--primary)]/5 transition-colors"

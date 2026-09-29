@@ -2,13 +2,15 @@ import { redirect } from "next/navigation"
 import { redefinirSenha } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/server"
 import { UtensilsCrossed } from "lucide-react"
+import { PasswordInput } from "@/components/ui/password-input"
+import { PasswordFieldChecklist } from "@/components/ui/password-field-checklist"
 
 interface RedefinirSenhaProps {
   searchParams: Promise<{ error?: string }>
 }
 
 const errorMessages: Record<string, string> = {
-  senha_curta: "A senha precisa ter pelo menos 6 caracteres.",
+  senha_fraca: "A senha não atende aos critérios de segurança (mínimo 8 caracteres, maiúscula, minúscula, número e caractere especial).",
   senhas_diferentes: "As senhas não conferem. Digite a mesma senha nos dois campos.",
   senha_igual: "A nova senha precisa ser diferente da atual.",
   erro_generico: "Não foi possível redefinir a senha. Tente novamente.",
@@ -54,16 +56,7 @@ export default async function RedefinirSenhaPage({ searchParams }: RedefinirSenh
               >
                 Nova senha
               </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                minLength={6}
-                autoComplete="new-password"
-                placeholder="Mínimo 6 caracteres"
-                className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-              />
+              <PasswordFieldChecklist id="password" name="password" placeholder="Crie a nova senha" />
             </div>
 
             <div>
@@ -73,15 +66,13 @@ export default async function RedefinirSenhaPage({ searchParams }: RedefinirSenh
               >
                 Confirmar nova senha
               </label>
-              <input
+              <PasswordInput
                 id="confirmar"
                 name="confirmar"
-                type="password"
                 required
-                minLength={6}
                 autoComplete="new-password"
                 placeholder="Repita a senha"
-                className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+                className="w-full h-11"
               />
             </div>
 

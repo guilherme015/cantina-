@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation"
 import { headers } from "next/headers"
 import { createClient } from "@/lib/supabase/server"
+import { senhaAtendeCriterios } from "@/lib/senha"
 
 export async function login(formData: FormData) {
   const supabase = await createClient()
@@ -23,11 +24,19 @@ export async function signup(formData: FormData) {
   const supabase = await createClient()
 
   const email = formData.get("email") as string
-  const password = formData.get("password") as string
+  const password = formData.get("password")
   const nomeIgreja = (formData.get("nomeIgreja") as string)?.trim()
 
   if (!nomeIgreja) {
     redirect("/login?error=nome_igreja_obrigatorio")
+  }
+
+  // Validação client-side (checklist) é só UX — sem conferir aqui de novo,
+  // um POST direto no form action passaria por cima da senha fraca. Confere
+  // o tipo porque um POST manual pode mandar qualquer coisa no campo (ou
+  // nada), e senhaAtendeCriterios espera string.
+  if (typeof password !== "string" || !senhaAtendeCriterios(password)) {
+    redirect("/login?error=senha_fraca")
   }
 
   // A criação da igreja e do vínculo de owner acontece num trigger no banco
@@ -92,8 +101,8 @@ export async function redefinirSenha(formData: FormData) {
   const password = formData.get("password") as string
   const confirmar = formData.get("confirmar") as string
 
-  if (!password || password.length < 6) {
-    redirect("/redefinir-senha?error=senha_curta")
+  if (!password || !senhaAtendeCriterios(password)) {
+    redirect("/redefinir-senha?error=senha_fraca")
   }
   if (password !== confirmar) {
     redirect("/redefinir-senha?error=senhas_diferentes")
@@ -104,6 +113,13 @@ export async function redefinirSenha(formData: FormData) {
   if (error) {
     if (error.code === "same_password") {
       redirect("/redefinir-senha?error=senha_igual")
+    }
+    // O Supabase pode rejeitar uma senha que já passou em
+    // senhaAtendeCriterios acima (ex.: proteção de senha vazada, se
+    // ligada no projeto) — mesma mensagem do resto do fluxo em vez de cair
+    // no genérico.
+    if (error.code === "weak_password") {
+      redirect("/redefinir-senha?error=senha_fraca")
     }
     redirect("/redefinir-senha?error=erro_generico")
   }
