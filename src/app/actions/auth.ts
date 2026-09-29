@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { headers } from "next/headers"
 import { createClient } from "@/lib/supabase/server"
 import { senhaAtendeCriterios } from "@/lib/senha"
+import { sessaoVeioDeRecuperacao } from "@/lib/sessao-recuperacao"
 
 export async function login(formData: FormData) {
   const supabase = await createClient()
@@ -98,6 +99,15 @@ export async function solicitarRecuperacaoSenha(formData: FormData) {
 export async function redefinirSenha(formData: FormData) {
   const supabase = await createClient()
 
+  // A checagem em redefinir-senha/page.tsx só decide o que renderizar —
+  // uma server action é o próprio endpoint (chamável direto via POST com o
+  // Next-Action id, sem passar pela página), então SEM conferir aqui de
+  // novo, qualquer sessão logada normalmente ainda conseguiria trocar a
+  // senha (issue #39 continuava aberta mesmo com a página bloqueando).
+  if (!(await sessaoVeioDeRecuperacao(supabase))) {
+    redirect("/login?error=link_invalido")
+  }
+
   const password = formData.get("password") as string
   const confirmar = formData.get("confirmar") as string
 
@@ -124,5 +134,11 @@ export async function redefinirSenha(formData: FormData) {
     redirect("/redefinir-senha?error=erro_generico")
   }
 
-  redirect("/vendas")
+  // Encerra a sessão de recuperação em vez de seguir logado: fecha a janela
+  // residual do fix da issue #39 (essa mesma sessão, com o token de
+  // recuperação, poderia voltar em /redefinir-senha e trocar a senha de
+  // novo enquanto durasse) e garante que só quem sabe a senha nova
+  // consegue entrar a partir daqui.
+  await supabase.auth.signOut()
+  redirect("/login?senha_alterada=1")
 }

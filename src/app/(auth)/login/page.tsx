@@ -5,7 +5,7 @@ import { PasswordInput } from "@/components/ui/password-input"
 import { PasswordFieldChecklist } from "@/components/ui/password-field-checklist"
 
 interface LoginPageProps {
-  searchParams: Promise<{ error?: string }>
+  searchParams: Promise<{ error?: string; senha_alterada?: string }>
 }
 
 const errorMessages: Record<string, string> = {
@@ -19,7 +19,7 @@ const errorMessages: Record<string, string> = {
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
-  const { error } = await searchParams
+  const { error, senha_alterada } = await searchParams
 
   return (
     <div className="min-h-screen bg-[var(--background)] flex items-center justify-center p-4">
@@ -43,6 +43,12 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           {error && errorMessages[error] && (
             <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
               {errorMessages[error]}
+            </div>
+          )}
+
+          {senha_alterada === "1" && (
+            <div className="mb-4 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-700">
+              Senha alterada com sucesso! Faça login com a nova senha.
             </div>
           )}
 

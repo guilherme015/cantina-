@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 import { redefinirSenha } from "@/app/actions/auth"
 import { createClient } from "@/lib/supabase/server"
+import { sessaoVeioDeRecuperacao } from "@/lib/sessao-recuperacao"
 import { UtensilsCrossed } from "lucide-react"
 import { PasswordInput } from "@/components/ui/password-input"
 import { PasswordFieldChecklist } from "@/components/ui/password-field-checklist"
@@ -19,10 +20,24 @@ const errorMessages: Record<string, string> = {
 export default async function RedefinirSenhaPage({ searchParams }: RedefinirSenhaProps) {
   const { error } = await searchParams
 
-  // Só chega aqui quem veio do link de recuperação (com sessão criada).
+  // Só chega aqui quem veio do link de recuperação — getUser() valida a
+  // sessão contra o servidor do Supabase (não só lê o cookie).
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
+    redirect("/login?error=link_invalido")
+  }
+
+  // getUser() garante que a sessão é válida, mas não que veio do link de
+  // recuperação — qualquer usuário logado normalmente também passaria
+  // (issue #39: alguém com acesso breve a um dispositivo compartilhado já
+  // logado conseguia abrir esta página direto pela URL e trocar a senha
+  // sem saber a atual, tomando a conta). Isso aqui só decide o que
+  // renderizar — a checagem que vale de verdade é a mesma função chamada
+  // de novo dentro da server action redefinirSenha, que é a fronteira real
+  // (um POST direto na action, sem passar por esta página, ainda
+  // conseguiria chamar updateUser se só a página checasse).
+  if (!(await sessaoVeioDeRecuperacao(supabase))) {
     redirect("/login?error=link_invalido")
   }
 
