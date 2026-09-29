@@ -1,11 +1,11 @@
 "use server"
 
-import { createClient } from "@/lib/supabase/server"
+import type { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
-import { getIgrejaIdAtual } from "@/lib/igreja"
+import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -32,12 +32,8 @@ async function cardapioHojeId(
 }
 
 export async function listarVendasHoje(): Promise<VendaComItens[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as VendaComItens[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as VendaComItens[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 
@@ -70,11 +66,8 @@ export async function criarVenda(dados: {
   desconto: number
   itens: ItemVenda[]
 }) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   if (dados.itens.length === 0) return { error: "Adicione ao menos um item" }
@@ -218,11 +211,8 @@ export async function criarVenda(dados: {
 }
 
 export async function cancelarVenda(id: string) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: venda } = await supabase
@@ -318,12 +308,8 @@ export async function cancelarVenda(id: string) {
 }
 
 export async function listarItensCardapioHoje(): Promise<Item[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as Item[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as Item[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   // Sem cardápio configurado pra hoje = nada disponível pra venda. Antes
   // isso caía num fallback que mostrava TODOS os produtos ativos, o que

@@ -1,9 +1,8 @@
 "use server"
 
-import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
-import { getIgrejaIdAtual } from "@/lib/igreja"
+import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import { hojeBR } from "@/lib/data-br"
 
 export type CardapioHoje = {
@@ -13,12 +12,8 @@ export type CardapioHoje = {
 }
 
 export async function getCardapioHoje(): Promise<CardapioHoje | null> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return null
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return null
 
   const { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
@@ -42,11 +37,8 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
 }
 
 export async function salvarCardapioHoje(itemIds: string[]) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const data = hojeBR()
@@ -101,11 +93,8 @@ export async function salvarCardapioHoje(itemIds: string[]) {
 // "ontem": a maioria das cantinas de igreja não abre todo dia (só domingo,
 // por exemplo), então "ontem" quase sempre estaria vazio.
 export async function copiarUltimoCardapio(): Promise<{ error?: string; success?: boolean; itemIds?: string[] }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: ultimoCardapio, error: errBusca } = await supabase

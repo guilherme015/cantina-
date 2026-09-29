@@ -1,18 +1,13 @@
 "use server"
 
-import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
-import { getIgrejaIdAtual } from "@/lib/igreja"
+import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import type { Item } from "@/types/database"
 
 export async function listarProdutos(): Promise<Item[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as Item[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as Item[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return [] as Item[]
 
   const { data, error } = await supabase
     .from("tab_itens")
@@ -25,11 +20,8 @@ export async function listarProdutos(): Promise<Item[]> {
 }
 
 export async function criarProduto(formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const nome = formData.get("nome") as string
@@ -53,11 +45,8 @@ export async function criarProduto(formData: FormData): Promise<{ error?: string
 }
 
 export async function atualizarProduto(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const nome = formData.get("nome") as string
@@ -79,11 +68,8 @@ export async function atualizarProduto(id: string, formData: FormData): Promise<
 }
 
 export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { error } = await supabase
@@ -99,11 +85,8 @@ export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ 
 }
 
 export async function excluirProduto(id: string): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { error } = await supabase

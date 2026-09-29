@@ -1,20 +1,15 @@
 "use server"
 
-import { createClient } from "@/lib/supabase/server"
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { hojeBR, limitesDiaBR } from "@/lib/data-br"
-import { getIgrejaIdAtual } from "@/lib/igreja"
+import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
 export async function listarContasPagar(): Promise<ContaPagar[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as ContaPagar[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as ContaPagar[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   const { data } = await supabase
     .from("tab_contas_pagar")
@@ -26,11 +21,8 @@ export async function listarContasPagar(): Promise<ContaPagar[]> {
 }
 
 export async function criarContaPagar(formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const descricao = formData.get("descricao") as string
@@ -58,11 +50,8 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
 }
 
 export async function editarContaPagar(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const descricao = formData.get("descricao") as string
@@ -91,11 +80,8 @@ export async function editarContaPagar(id: string, formData: FormData): Promise<
 }
 
 export async function excluirContaPagar(id: string): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: linhas, error } = await supabase
@@ -115,11 +101,8 @@ export async function excluirContaPagar(id: string): Promise<{ error?: string; s
 }
 
 export async function pagarConta(id: string): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: conta } = await supabase
@@ -178,12 +161,8 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
 }
 
 export async function listarContasReceber(): Promise<ContaReceber[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as ContaReceber[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as ContaReceber[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   const { data } = await supabase
     .from("tab_contas_receber")
@@ -195,11 +174,8 @@ export async function listarContasReceber(): Promise<ContaReceber[]> {
 }
 
 export async function editarContaReceber(id: string, dados: { cliente: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   if (!dados.cliente || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
@@ -228,11 +204,8 @@ export async function editarContaReceber(id: string, dados: { cliente: string; v
 }
 
 export async function excluirContaReceber(id: string): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: linhas, error } = await supabase
@@ -252,11 +225,8 @@ export async function excluirContaReceber(id: string): Promise<{ error?: string;
 }
 
 export async function baixarContaReceber(id: string, formaPagamento: string): Promise<{ error?: string; success?: boolean }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const { data: conta } = await supabase
@@ -399,12 +369,8 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
 }
 
 export async function listarExtrato(): Promise<ExtratoFinanceiro[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return [] as ExtratoFinanceiro[]
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return [] as ExtratoFinanceiro[]
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   const { inicio, fimExclusivo } = limitesDiaBR(hojeBR())
 

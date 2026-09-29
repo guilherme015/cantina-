@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { hojeBR, limitesDiaBR } from "@/lib/data-br"
-import { getIgrejaIdAtual } from "@/lib/igreja"
+import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import type { FechamentoCaixa } from "@/types/database"
 
 export interface ResumoDia {
@@ -72,11 +72,8 @@ async function calcularResumo(
 }
 
 export async function resumoDoDia(data?: string): Promise<ResumoDia | { error: string }> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
   const dia = data ?? hojeBR()
@@ -89,12 +86,8 @@ export async function resumoDoDia(data?: string): Promise<ResumoDia | { error: s
 }
 
 export async function listarFechamentos(): Promise<FechamentoCaixa[]> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const igrejaId = await getIgrejaIdAtual(supabase, user.id)
-  if (!igrejaId) return []
+  const { user, igrejaId, supabase } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return []
 
   const { data } = await supabase
     .from("tab_fechamento_caixa")
@@ -111,6 +104,10 @@ export async function fecharCaixa(dados: {
   valorInformado: number
   observacoes?: string
 }): Promise<{ error?: string; success?: boolean }> {
+  // Sem getUsuarioEIgreja() de propósito: a RPC fechar_caixa resolve a
+  // igreja sozinha (SELECT em igreja_membros dentro da função SECURITY
+  // DEFINER), então buscar igrejaId aqui também seria uma consulta a mais
+  // sem uso — o oposto do que a #37 quer resolver.
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
@@ -147,6 +144,8 @@ export async function fecharCaixa(dados: {
 }
 
 export async function reabrirCaixa(data: string, justificativa: string): Promise<{ error?: string; success?: boolean }> {
+  // Mesmo motivo de fecharCaixa: reabrir_caixa também resolve a igreja
+  // sozinha na RPC.
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: "Não autenticado" }
