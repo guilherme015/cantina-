@@ -3,9 +3,11 @@ import { login, signup } from "@/app/actions/auth"
 import { UtensilsCrossed } from "lucide-react"
 import { PasswordInput } from "@/components/ui/password-input"
 import { PasswordFieldChecklist } from "@/components/ui/password-field-checklist"
+import { createClient } from "@/lib/supabase/server"
+import { ROTULO_PAPEL } from "@/lib/papel"
 
 interface LoginPageProps {
-  searchParams: Promise<{ error?: string; senha_alterada?: string }>
+  searchParams: Promise<{ error?: string; senha_alterada?: string; convite?: string }>
 }
 
 const errorMessages: Record<string, string> = {
@@ -16,10 +18,23 @@ const errorMessages: Record<string, string> = {
   senha_fraca: "A senha não atende aos critérios de segurança (mínimo 8 caracteres, maiúscula, minúscula, número e caractere especial).",
   link_invalido: "O link de recuperação é inválido ou expirou. Solicite um novo.",
   nome_igreja_obrigatorio: "Informe o nome da sua igreja para criar a conta.",
+  convite_invalido:
+    "Este convite é inválido, expirou ou já foi usado. Peça um novo link ao administrador da igreja.",
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
-  const { error, senha_alterada } = await searchParams
+  const { error: erroParam, senha_alterada, convite } = await searchParams
+
+  // Link de convite (/login?convite=<token>): confere antes de mostrar o
+  // cadastro de membro. Token inválido/expirado/usado cai no cadastro normal
+  // com o aviso — nunca mostra "você foi convidado" sem convite válido.
+  let convidado: { nome_igreja: string; papel: "admin" | "operador" } | null = null
+  if (convite) {
+    const supabase = await createClient()
+    const { data } = await supabase.rpc("consultar_convite", { p_token: convite })
+    convidado = data?.[0] ?? null
+  }
+  const error = convite && !convidado ? "convite_invalido" : erroParam
 
   return (
     <div className="min-h-screen bg-[var(--background)] flex items-center justify-center p-4">
@@ -112,21 +127,32 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             </div>
             <div className="relative flex justify-center">
               <span className="bg-white px-3 text-xs text-[var(--muted-foreground)]">
-                Primeira vez?
+                {convidado ? "Convidado?" : "Primeira vez?"}
               </span>
             </div>
           </div>
 
           {/* Formulário de Cadastro */}
           <form action={signup} className="space-y-4">
-            <input
-              name="nomeIgreja"
-              type="text"
-              required
-              autoComplete="organization"
-              placeholder="Nome da sua igreja"
-              className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
-            />
+            {convidado ? (
+              <>
+                <input type="hidden" name="convite" value={convite} />
+                <div className="px-4 py-3 rounded-lg bg-[var(--secondary)] text-sm text-[var(--foreground)]">
+                  Você foi convidado para <strong>{convidado.nome_igreja}</strong> como{" "}
+                  <strong>{ROTULO_PAPEL[convidado.papel]}</strong>. Crie sua conta abaixo — o
+                  convite vale só para contas novas.
+                </div>
+              </>
+            ) : (
+              <input
+                name="nomeIgreja"
+                type="text"
+                required
+                autoComplete="organization"
+                placeholder="Nome da sua igreja"
+                className="w-full h-11 px-3 rounded-lg border border-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]"
+              />
+            )}
             <input
               name="email"
               type="email"
@@ -140,7 +166,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
               type="submit"
               className="w-full h-11 rounded-lg border border-[var(--primary)] text-[var(--primary)] text-sm font-semibold hover:bg-[var(--primary)]/5 transition-colors"
             >
-              Criar conta grátis
+              {convidado ? "Criar conta e entrar" : "Criar conta grátis"}
             </button>
           </form>
         </div>

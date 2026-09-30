@@ -3,16 +3,22 @@
 -- Execute este script no SQL Editor do Supabase
 --
 -- Multi-igreja: cada registro pertence a uma "igreja" (tenant).
--- Um usuário pertence a exatamente 1 igreja via igreja_membros (sem
--- convite de membro ainda), e o isolamento de dados (RLS) é por
--- igreja, não por usuário — assim vários usuários da mesma igreja
--- compartilham os mesmos dados. `user_id` nas tabelas de negócio
--- continua existindo só como registro de "quem fez", não é mais
--- usado para isolamento.
+-- Um usuário pertence a exatamente 1 igreja via igreja_membros, e o
+-- isolamento de dados (RLS) é por igreja, não por usuário — assim
+-- vários usuários da mesma igreja compartilham os mesmos dados.
+-- `user_id` nas tabelas de negócio continua existindo só como
+-- registro de "quem fez", não é mais usado para isolamento.
+--
+-- Papéis (#53): cada membro é `admin` ou `operador`. Operador vende,
+-- dá baixa em fiado e lê; o resto (cancelar venda, Contas a Pagar,
+-- fechar caixa, equipe...) é só admin — aplicado aqui no banco (RLS,
+-- triggers e RPCs), não só escondendo botão na tela. Membros novos
+-- entram por link de convite (igreja_convites).
 --
 -- Para atualizar um projeto Supabase que já tem o schema antigo
--- (sem igreja_id), use supabase/migration-multi-igreja.sql em vez
--- deste arquivo. Este aqui é o estado-alvo, para instalações novas.
+-- (sem igreja_id), use supabase/migration-multi-igreja.sql; se já
+-- tem multi-igreja mas não tem papéis, use supabase/migration-papeis.sql.
+-- Este arquivo é o estado-alvo, para instalações novas.
 -- ============================================================
 
 -- Habilitar extensão UUID
@@ -36,11 +42,38 @@ CREATE TABLE IF NOT EXISTS igreja_membros (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  papel TEXT NOT NULL DEFAULT 'membro' CHECK (papel IN ('owner', 'membro')),
-  -- Um usuário pertence a no máximo 1 igreja por enquanto (não há convite de
-  -- membro ainda). Isso também garante que getIgrejaIdAtual() nunca resolva
-  -- igrejas diferentes em chamadas diferentes para o mesmo usuário.
+  papel TEXT NOT NULL DEFAULT 'operador' CHECK (papel IN ('admin', 'operador')),
+  -- Snapshot do e-mail de quando a pessoa entrou na igreja — só pra tela de
+  -- Equipe listar quem é quem (o e-mail mora em auth.users, que o client
+  -- não lê). O app não tem troca de e-mail hoje.
+  email TEXT,
+  -- Um usuário pertence a no máximo 1 igreja por enquanto (convite só vale
+  -- pra conta nova). Isso também garante que getIgrejaIdAtual() nunca
+  -- resolva igrejas diferentes em chamadas diferentes para o mesmo usuário.
   UNIQUE (user_id)
+);
+
+-- ============================================================
+-- TABELA: igreja_convites (link de uso único pra entrar numa igreja)
+--
+-- Só o HASH do token fica no banco: um vazamento da tabela não entrega
+-- links válidos. O token (64 hex = duas UUID v4, do gerador criptográfico
+-- do Postgres) é devolvido uma única vez por criar_convite. Vale 7 dias.
+-- O cadastro por convite é resolvido no trigger de cadastro
+-- (criar_igreja_no_cadastro, mais abaixo).
+-- ============================================================
+CREATE TABLE IF NOT EXISTS igreja_convites (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
+  -- SET NULL, não CASCADE: excluir a conta de quem convidou não apaga o
+  -- histórico de convites (nem o vínculo de quem já entrou por ele).
+  criado_por UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  papel TEXT NOT NULL CHECK (papel IN ('admin', 'operador')),
+  token_hash BYTEA NOT NULL UNIQUE,
+  expira_em TIMESTAMPTZ NOT NULL,
+  usado_em TIMESTAMPTZ,
+  usado_por UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
 -- ============================================================
@@ -281,6 +314,39 @@ REVOKE ALL ON FUNCTION private.minhas_igrejas() FROM PUBLIC;
 GRANT USAGE ON SCHEMA private TO authenticated;
 GRANT EXECUTE ON FUNCTION private.minhas_igrejas() TO authenticated;
 
+-- Papel do usuário logado (#53). Mesmo padrão e mesmo motivo de
+-- minhas_igrejas(): SECURITY DEFINER pra ler igreja_membros sem recursão de
+-- RLS, schema private pra não virar RPC pública.
+CREATE OR REPLACE FUNCTION private.igrejas_onde_sou_admin()
+RETURNS SETOF UUID
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = ''
+AS $$
+  SELECT igreja_id FROM public.igreja_membros
+  WHERE user_id = (SELECT auth.uid()) AND papel = 'admin'
+$$;
+
+REVOKE ALL ON FUNCTION private.igrejas_onde_sou_admin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION private.igrejas_onde_sou_admin() TO authenticated;
+
+CREATE OR REPLACE FUNCTION private.sou_admin(p_igreja_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.igreja_membros
+    WHERE user_id = (SELECT auth.uid()) AND igreja_id = p_igreja_id AND papel = 'admin'
+  )
+$$;
+
+REVOKE ALL ON FUNCTION private.sou_admin(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION private.sou_admin(UUID) TO authenticated;
+
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
 -- Garante que cada usuário só vê os dados das igrejas de que é membro
@@ -288,6 +354,7 @@ GRANT EXECUTE ON FUNCTION private.minhas_igrejas() TO authenticated;
 
 ALTER TABLE igrejas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE igreja_membros ENABLE ROW LEVEL SECURITY;
+ALTER TABLE igreja_convites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_itens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_cardapio_dia ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_cardapio_dia_itens ENABLE ROW LEVEL SECURITY;
@@ -302,10 +369,11 @@ ALTER TABLE tab_fechamento_caixa ENABLE ROW LEVEL SECURITY;
 -- Não existe policy de INSERT/UPDATE/DELETE para `authenticated` de
 -- propósito — o único jeito de criar uma igreja e o vínculo do dono é o
 -- trigger `trg_criar_igreja_no_cadastro` (ver mais abaixo), que roda como
--- SECURITY DEFINER e por isso ignora RLS. Sem convite de membro ainda,
--- não há necessidade de nenhum outro caminho de escrita client-side —
--- isso também fecha a brecha de um usuário se auto-inserir como membro
--- de qualquer igreja que ele reivindique ser "dele".
+-- SECURITY DEFINER e por isso ignora RLS. Entrar numa igreja existente é
+-- só por convite (criar_convite / trigger de cadastro), e mudar papel ou
+-- remover membro é só pelas RPCs alterar_papel_membro / remover_membro —
+-- isso fecha a brecha de um usuário se auto-inserir como membro (ou
+-- admin) de qualquer igreja que ele reivindique ser "dele".
 CREATE POLICY "membros_veem_propria_igreja" ON igrejas
   FOR SELECT TO authenticated USING (
     owner_user_id = (SELECT auth.uid())
@@ -315,49 +383,132 @@ CREATE POLICY "membros_veem_propria_igreja" ON igrejas
 CREATE POLICY "membros_veem_colegas_de_igreja" ON igreja_membros
   FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
 
--- Políticas para tab_itens
-CREATE POLICY "membros_igreja_itens" ON tab_itens
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Convites: admin vê e revoga (só os ainda não usados) os da própria
+-- igreja. Criar é só pela RPC criar_convite (precisa gerar o token e
+-- gravar o hash), então não há policy de INSERT/UPDATE.
+CREATE POLICY "admins_veem_convites" ON igreja_convites
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
+CREATE POLICY "admins_revogam_convites" ON igreja_convites
+  FOR DELETE TO authenticated USING (
+    igreja_id IN (SELECT private.igrejas_onde_sou_admin()) AND usado_em IS NULL
+  );
 
--- Políticas para tab_cardapio_dia
-CREATE POLICY "membros_igreja_cardapio" ON tab_cardapio_dia
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Reforço defensivo (sem brecha hoje, já que não existe policy de escrita):
+-- o Supabase concede GRANT ALL de tabela pra `anon`/`authenticated` por
+-- padrão — impede que uma policy FOR ALL adicionada por engano no futuro
+-- deixe alguém se auto-promover a admin ou forjar um convite.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON igreja_membros FROM anon, authenticated;
+REVOKE ALL ON igreja_convites FROM anon;
+REVOKE INSERT, UPDATE, TRUNCATE ON igreja_convites FROM authenticated;
 
--- Políticas para tab_cardapio_dia_itens — direto por igreja_id próprio
--- (#21), não mais via subquery em tab_cardapio_dia: o subquery só cobria
--- USING, sem WITH CHECK explícito (FOR ALL sem WITH CHECK reusa a USING
--- pro INSERT, mas ainda checava só o cardápio, nunca o item_id).
-CREATE POLICY "membros_igreja_cardapio_itens" ON tab_cardapio_dia_itens
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Permissive policies se somam com OR: "membros veem" (SELECT) + "admins
+-- gerenciam" (FOR ALL) deixa todo membro ler e só admin escrever. O
+-- operador só escreve onde uma policy de INSERT/UPDATE/DELETE própria
+-- existe abaixo (#53).
+--
+-- Itens das tabelas filhas (tab_cardapio_dia_itens, tab_vendas_itens) usam
+-- igreja_id próprio direto, não subquery na tabela-pai (#21): o subquery só
+-- cobria USING, sem WITH CHECK explícito.
 
--- Políticas para tab_vendas
-CREATE POLICY "membros_igreja_vendas" ON tab_vendas
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Produtos e cardápio do dia: todos leem (Vendas precisa), só admin escreve.
+CREATE POLICY "membros_veem_itens" ON tab_itens
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "admins_gerenciam_itens" ON tab_itens
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
 
--- Políticas para tab_vendas_itens (via venda da igreja)
--- Direto por igreja_id próprio (#21), mesmo motivo de tab_cardapio_dia_itens.
-CREATE POLICY "membros_igreja_vendas_itens" ON tab_vendas_itens
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_veem_cardapio" ON tab_cardapio_dia
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "admins_gerenciam_cardapio" ON tab_cardapio_dia
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
 
--- Políticas para tab_extrato_financeiro
-CREATE POLICY "membros_igreja_extrato" ON tab_extrato_financeiro
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_veem_cardapio_itens" ON tab_cardapio_dia_itens
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "admins_gerenciam_cardapio_itens" ON tab_cardapio_dia_itens
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
 
--- Políticas para tab_contas_receber
-CREATE POLICY "membros_igreja_contas_receber" ON tab_contas_receber
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Contas a Pagar: só admin, inclusive pra ler.
+CREATE POLICY "admins_gerenciam_contas_pagar" ON tab_contas_pagar
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
 
--- Políticas para tab_contas_pagar
-CREATE POLICY "membros_igreja_contas_pagar" ON tab_contas_pagar
-  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
-  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+-- Vendas: operador cria e lê; editar/cancelar (UPDATE) é só admin. O operador
+-- também apaga a PRÓPRIA venda recente, mas só se ela ainda não tem nenhum
+-- lançamento no extrato nem conta a receber ligada — é exatamente o rollback
+-- de criarVenda quando um passo depois do INSERT da venda falha. Venda que já
+-- mexeu em dinheiro só o admin cancela (cancelarVenda, com estorno); sem essa
+-- trava o operador teria um "cancelar sem registro" via DELETE direto.
+-- created_at é forçado por trg_fixar_datas_venda, então o cliente não
+-- consegue empurrar a venda pra fora da janela de 5 minutos.
+CREATE POLICY "membros_veem_vendas" ON tab_vendas
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_criam_vendas" ON tab_vendas
+  FOR INSERT TO authenticated WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "admins_gerenciam_vendas" ON tab_vendas
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
+CREATE POLICY "operador_desfaz_propria_venda_sem_lancamento" ON tab_vendas
+  FOR DELETE TO authenticated USING (
+    igreja_id IN (SELECT private.minhas_igrejas())
+    AND user_id = (SELECT auth.uid())
+    AND created_at > now() - interval '5 minutes'
+    AND NOT EXISTS (SELECT 1 FROM public.tab_extrato_financeiro e WHERE e.venda_id = tab_vendas.id)
+    AND NOT EXISTS (SELECT 1 FROM public.tab_contas_receber c WHERE c.venda_id = tab_vendas.id)
+  );
+
+-- Itens da venda: operador lê e insere — mas só na PRÓPRIA venda recente (sem
+-- isso ele encheria de itens uma venda de outra pessoa ou de outro dia, e o
+-- detalhe deixaria de bater com o total). Apagar/editar item solto é só admin;
+-- o rollback de criarVenda apaga a venda e o ON DELETE CASCADE leva os itens
+-- junto (FK não passa por RLS).
+CREATE POLICY "membros_veem_vendas_itens" ON tab_vendas_itens
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_criam_vendas_itens" ON tab_vendas_itens
+  FOR INSERT TO authenticated WITH CHECK (
+    igreja_id IN (SELECT private.minhas_igrejas())
+    AND EXISTS (
+      SELECT 1 FROM public.tab_vendas v
+      WHERE v.id = tab_vendas_itens.venda_id
+        AND v.igreja_id = tab_vendas_itens.igreja_id
+        AND v.user_id = (SELECT auth.uid())
+        AND v.created_at > now() - interval '5 minutes'
+    )
+  );
+CREATE POLICY "admins_gerenciam_vendas_itens" ON tab_vendas_itens
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
+
+-- Extrato: todos leem; operador só INSERE entrada de venda/recebimento
+-- (nunca saída nem despesa paga); editar/excluir é só admin.
+CREATE POLICY "membros_veem_extrato" ON tab_extrato_financeiro
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_lancam_entrada_extrato" ON tab_extrato_financeiro
+  FOR INSERT TO authenticated WITH CHECK (
+    igreja_id IN (SELECT private.minhas_igrejas())
+    AND tipo_movimentacao = 'entrada'
+    AND conta_pagar_id IS NULL
+  );
+CREATE POLICY "admins_gerenciam_extrato" ON tab_extrato_financeiro
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
+
+-- Contas a Receber: operador lê e cria (fiado nasce de uma venda; nunca já
+-- paga). DAR BAIXA é pela RPC baixar_conta_receber — atômica: marca a conta,
+-- sincroniza a venda e lança a entrada no extrato numa transação só. UPDATE
+-- direto, editar e excluir são só admin: com UPDATE solto o operador marcaria
+-- a conta como recebida sem lançar nada no caixa (ou reabriria uma já
+-- recebida e faria o cliente pagar duas vezes).
+CREATE POLICY "membros_veem_contas_receber" ON tab_contas_receber
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+CREATE POLICY "membros_criam_contas_receber" ON tab_contas_receber
+  FOR INSERT TO authenticated WITH CHECK (
+    igreja_id IN (SELECT private.minhas_igrejas()) AND COALESCE(pago, false) = false
+  );
+CREATE POLICY "admins_gerenciam_contas_receber" ON tab_contas_receber
+  FOR ALL TO authenticated USING (igreja_id IN (SELECT private.igrejas_onde_sou_admin()))
+  WITH CHECK (igreja_id IN (SELECT private.igrejas_onde_sou_admin()));
 
 -- Políticas para tab_fechamento_caixa: só SELECT para o cliente. Sem
 -- policy de INSERT/UPDATE/DELETE de propósito — o único jeito de gravar
@@ -371,6 +522,32 @@ CREATE POLICY "membros_igreja_contas_pagar" ON tab_contas_pagar
 -- realidade.
 CREATE POLICY "membros_igreja_fechamento_select" ON tab_fechamento_caixa
   FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+
+-- ============================================================
+-- TRIGGER: datas de venda vêm do servidor (#53)
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.fixar_datas_venda()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  -- created_at/data_hora de venda vêm do servidor quando quem insere é um
+  -- usuário final (auth.uid() não nulo) — a janela de 5 minutos das policies
+  -- de operador e o "dia" da venda não podem depender de um valor que o
+  -- cliente manda. auth.uid() nulo = SQL Editor/service_role: migração e
+  -- correção manual podem gravar a data que quiserem.
+  IF (SELECT auth.uid()) IS NOT NULL THEN
+    NEW.created_at := now();
+    NEW.data_hora := now();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_fixar_datas_venda
+  BEFORE INSERT ON tab_vendas
+  FOR EACH ROW EXECUTE FUNCTION public.fixar_datas_venda();
 
 -- ============================================================
 -- TRIGGER: numerar venda por igreja
@@ -409,7 +586,7 @@ CREATE TRIGGER trg_numerar_venda_por_igreja
   FOR EACH ROW EXECUTE FUNCTION public.numerar_venda_por_igreja();
 
 -- ============================================================
--- TRIGGER: criar igreja + vínculo de owner no cadastro
+-- TRIGGER: criar igreja + vínculo de admin no cadastro (ou entrar por convite)
 --
 -- O client não tem mais como inserir em igrejas/igreja_membros (não
 -- existe policy de INSERT para `authenticated` nessas tabelas — ver
@@ -440,13 +617,39 @@ SET search_path = ''
 AS $$
 DECLARE
   nova_igreja_id UUID;
+  v_token TEXT;
+  v_convite public.igreja_convites;
 BEGIN
+  v_token := btrim(NEW.raw_user_meta_data->>'convite');
+
+  IF v_token IS NOT NULL AND v_token <> '' THEN
+    SELECT * INTO v_convite
+    FROM public.igreja_convites
+    WHERE token_hash = sha256(convert_to(v_token, 'utf8'))
+      AND usado_em IS NULL
+      AND expira_em > now()
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Convite inválido ou expirado.';
+    END IF;
+
+    INSERT INTO public.igreja_membros (igreja_id, user_id, papel, email)
+    VALUES (v_convite.igreja_id, NEW.id, v_convite.papel, NEW.email);
+
+    UPDATE public.igreja_convites
+    SET usado_em = now(), usado_por = NEW.id
+    WHERE id = v_convite.id;
+
+    RETURN NEW;
+  END IF;
+
   INSERT INTO public.igrejas (nome, owner_user_id)
   VALUES (COALESCE(NEW.raw_user_meta_data->>'nome_igreja', 'Minha Igreja'), NEW.id)
   RETURNING id INTO nova_igreja_id;
 
-  INSERT INTO public.igreja_membros (igreja_id, user_id, papel)
-  VALUES (nova_igreja_id, NEW.id, 'owner');
+  INSERT INTO public.igreja_membros (igreja_id, user_id, papel, email)
+  VALUES (nova_igreja_id, NEW.id, 'admin', NEW.email);
 
   RETURN NEW;
 END;
@@ -595,6 +798,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_igreja_id UUID;
+  v_papel TEXT;
   v_entradas_dinheiro NUMERIC;
   v_entradas_pix NUMERIC;
   v_entradas_cartao NUMERIC;
@@ -603,9 +807,14 @@ DECLARE
   v_diferenca NUMERIC;
   v_resultado public.tab_fechamento_caixa;
 BEGIN
-  SELECT igreja_id INTO v_igreja_id FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  SELECT igreja_id, papel INTO v_igreja_id, v_papel
+  FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
   IF v_igreja_id IS NULL THEN
     RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+  -- Só admin fecha o caixa (#53) — a nível de banco, não só na tela.
+  IF v_papel <> 'admin' THEN
+    RAISE EXCEPTION 'Apenas administradores podem fechar o caixa.';
   END IF;
 
   IF p_data > (now() AT TIME ZONE 'America/Sao_Paulo')::date THEN
@@ -748,6 +957,7 @@ SET search_path = ''
 AS $$
 DECLARE
   v_igreja_id UUID;
+  v_papel TEXT;
   v_fechamento public.tab_fechamento_caixa;
 BEGIN
   IF p_justificativa IS NULL OR btrim(p_justificativa) = '' THEN
@@ -758,9 +968,14 @@ BEGIN
     RAISE EXCEPTION 'Só é possível reabrir o caixa do dia de hoje.';
   END IF;
 
-  SELECT igreja_id INTO v_igreja_id FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  SELECT igreja_id, papel INTO v_igreja_id, v_papel
+  FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
   IF v_igreja_id IS NULL THEN
     RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+  -- Só admin reabre o caixa (#53).
+  IF v_papel <> 'admin' THEN
+    RAISE EXCEPTION 'Apenas administradores podem reabrir o caixa.';
   END IF;
 
   PERFORM pg_advisory_xact_lock(private.chave_lock_fechamento(v_igreja_id, p_data));
@@ -791,6 +1006,287 @@ REVOKE ALL ON FUNCTION public.reabrir_caixa(DATE, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.reabrir_caixa(DATE, TEXT) TO authenticated;
 
 -- ============================================================
+-- RPC: baixar_conta_receber(conta, forma_pagamento)
+--
+-- Dar baixa num fiado = marcar a conta como paga + sincronizar o status da
+-- venda + lançar a entrada no extrato. Antes isso eram 3 chamadas do client
+-- com rollback manual em cada ponto; com o operador sem UPDATE direto em
+-- contas/vendas (ver policies), tem que ser uma RPC, e uma transação só
+-- resolve de graça o que o JS tratava na mão: conta paga sem entrada no
+-- extrato, baixa concorrente com cancelarVenda, caixa fechado no meio.
+--
+-- Trava a VENDA antes da conta (mesma ordem em que cancelarVenda mexe nelas:
+-- venda -> conta) e relê a conta já travada: um cancelamento concorrente
+-- espera aqui e é visto (a baixa é recusada). cancelarVenda não é uma
+-- transação — são statements com autocommit —, então a espera é só pelo
+-- UPDATE do status; o resultado é o mesmo. Uma edição de valor concorrente
+-- TAMBÉM espera aqui, mas seria lançada com o valor novo sem ninguém
+-- perceber: por isso p_valor_esperado (o valor que a tela mostrou ao
+-- operador) — se a conta mudou, a baixa é recusada em vez de lançar um valor
+-- diferente do que foi cobrado. Se o dia já estiver fechado, o trigger de
+-- extrato levanta a exceção e TUDO é desfeito (conta e venda voltam).
+-- SECURITY DEFINER porque o operador não tem UPDATE direto nessas tabelas;
+-- seguro porque a igreja vem de auth.uid() (nunca do cliente), os valores
+-- gravados vêm da própria conta e a forma só aceita dinheiro/pix/cartao.
+CREATE OR REPLACE FUNCTION public.baixar_conta_receber(
+  p_conta_id UUID,
+  p_forma_pagamento TEXT,
+  p_valor_esperado NUMERIC
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_igreja_id UUID;
+  v_venda_id UUID;
+  v_status TEXT;
+  v_conta public.tab_contas_receber;
+BEGIN
+  IF p_forma_pagamento IS NULL OR p_forma_pagamento NOT IN ('dinheiro', 'pix', 'cartao') THEN
+    RAISE EXCEPTION 'Forma de pagamento inválida.';
+  END IF;
+
+  SELECT igreja_id INTO v_igreja_id FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  IF v_igreja_id IS NULL THEN
+    RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+
+  SELECT venda_id INTO v_venda_id
+  FROM public.tab_contas_receber WHERE id = p_conta_id AND igreja_id = v_igreja_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Conta não encontrada.';
+  END IF;
+
+  IF v_venda_id IS NOT NULL THEN
+    SELECT status INTO v_status
+    FROM public.tab_vendas WHERE id = v_venda_id AND igreja_id = v_igreja_id
+    FOR UPDATE;
+    IF v_status = 'cancelado' THEN
+      RAISE EXCEPTION 'A venda desta conta foi cancelada. Não é possível receber.';
+    END IF;
+  END IF;
+
+  SELECT * INTO v_conta
+  FROM public.tab_contas_receber WHERE id = p_conta_id AND igreja_id = v_igreja_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Conta não encontrada. Atualize a página.';
+  END IF;
+  IF v_conta.venda_id IS DISTINCT FROM v_venda_id THEN
+    RAISE EXCEPTION 'Esta conta foi alterada por outra pessoa. Atualize a página e tente de novo.';
+  END IF;
+  IF v_conta.pago THEN
+    RAISE EXCEPTION 'Esta conta já foi recebida.';
+  END IF;
+  IF p_valor_esperado IS NULL OR v_conta.valor_devido <> p_valor_esperado THEN
+    RAISE EXCEPTION 'O valor desta conta mudou. Atualize a página e confira antes de receber.';
+  END IF;
+
+  UPDATE public.tab_contas_receber
+  SET pago = true,
+      data_baixa = (now() AT TIME ZONE 'America/Sao_Paulo')::date,
+      forma_pagamento_baixa = p_forma_pagamento
+  WHERE id = p_conta_id AND igreja_id = v_igreja_id;
+
+  IF v_venda_id IS NOT NULL THEN
+    UPDATE public.tab_vendas SET status = 'pago'
+    WHERE id = v_venda_id AND igreja_id = v_igreja_id;
+  END IF;
+
+  INSERT INTO public.tab_extrato_financeiro (
+    user_id, igreja_id, tipo_movimentacao, forma_pagamento, valor, descricao, venda_id
+  ) VALUES (
+    auth.uid(), v_igreja_id, 'entrada', p_forma_pagamento, v_conta.valor_devido,
+    'Recebimento fiado - ' || v_conta.cliente, v_conta.venda_id
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.baixar_conta_receber(UUID, TEXT, NUMERIC) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.baixar_conta_receber(UUID, TEXT, NUMERIC) FROM anon;
+GRANT EXECUTE ON FUNCTION public.baixar_conta_receber(UUID, TEXT, NUMERIC) TO authenticated;
+
+-- ============================================================
+-- RPCs de convite e de gestão da equipe (#53)
+-- ============================================================
+-- Gera o convite e devolve o token em texto — única vez que ele existe
+-- fora do hash; a tela monta o link com ele e mostra na hora.
+CREATE OR REPLACE FUNCTION public.criar_convite(p_papel TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_igreja_id UUID;
+  v_token TEXT;
+BEGIN
+  IF p_papel IS NULL OR p_papel NOT IN ('admin', 'operador') THEN
+    RAISE EXCEPTION 'Papel inválido.';
+  END IF;
+
+  SELECT igreja_id INTO v_igreja_id
+  FROM public.igreja_membros
+  WHERE user_id = (SELECT auth.uid()) AND papel = 'admin';
+  IF v_igreja_id IS NULL THEN
+    RAISE EXCEPTION 'Apenas administradores podem convidar membros.';
+  END IF;
+
+  IF (
+    SELECT count(*) FROM public.igreja_convites
+    WHERE igreja_id = v_igreja_id AND usado_em IS NULL AND expira_em > now()
+  ) >= 20 THEN
+    RAISE EXCEPTION 'Há convites demais em aberto. Revogue algum antes de criar outro.';
+  END IF;
+
+  v_token := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+
+  INSERT INTO public.igreja_convites (igreja_id, criado_por, papel, token_hash, expira_em)
+  VALUES (v_igreja_id, auth.uid(), p_papel, sha256(convert_to(v_token, 'utf8')), now() + interval '7 days');
+
+  RETURN v_token;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.criar_convite(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.criar_convite(TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.criar_convite(TEXT) TO authenticated;
+
+-- Única função SECURITY DEFINER que `anon` PODE executar, de propósito:
+-- a tela de cadastro por convite precisa conferir o link antes de existir
+-- sessão. Só devolve nome da igreja e papel, e só pra quem já tem o token
+-- (64 hex, inadivinhável) — sem token válido, zero linhas.
+CREATE OR REPLACE FUNCTION public.consultar_convite(p_token TEXT)
+RETURNS TABLE (nome_igreja TEXT, papel TEXT)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = ''
+AS $$
+  SELECT i.nome, c.papel
+  FROM public.igreja_convites c
+  JOIN public.igrejas i ON i.id = c.igreja_id
+  WHERE c.token_hash = sha256(convert_to(btrim(p_token), 'utf8'))
+    AND c.usado_em IS NULL
+    AND c.expira_em > now()
+$$;
+
+REVOKE ALL ON FUNCTION public.consultar_convite(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.consultar_convite(TEXT) TO anon, authenticated;
+
+-- ============================================================
+-- 6b. Gestão da equipe (RPCs — igreja_membros não tem policy de escrita)
+--
+-- As duas travam a linha da igreja (FOR UPDATE) ANTES de conferir o
+-- papel de quem chama: sem isso, dois admins se rebaixando ao mesmo
+-- tempo passariam os dois pela checagem "ainda sobra um admin" e a
+-- igreja ficaria sem nenhum.
+-- ============================================================
+CREATE OR REPLACE FUNCTION public.alterar_papel_membro(p_user_id UUID, p_papel TEXT)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_igreja_id UUID;
+  v_papel_chamador TEXT;
+BEGIN
+  IF p_papel IS NULL OR p_papel NOT IN ('admin', 'operador') THEN
+    RAISE EXCEPTION 'Papel inválido.';
+  END IF;
+
+  SELECT igreja_id INTO v_igreja_id
+  FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  IF v_igreja_id IS NULL THEN
+    RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+
+  PERFORM 1 FROM public.igrejas WHERE id = v_igreja_id FOR UPDATE;
+
+  SELECT papel INTO v_papel_chamador
+  FROM public.igreja_membros
+  WHERE user_id = (SELECT auth.uid()) AND igreja_id = v_igreja_id;
+  IF v_papel_chamador IS DISTINCT FROM 'admin' THEN
+    RAISE EXCEPTION 'Apenas administradores podem alterar papéis.';
+  END IF;
+
+  UPDATE public.igreja_membros SET papel = p_papel
+  WHERE user_id = p_user_id AND igreja_id = v_igreja_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Membro não encontrado.';
+  END IF;
+
+  -- Rebaixado não pode deixar convite de admin "guardado": sem isso ele
+  -- cria uma conta nova com o token que já tinha e volta a ser admin.
+  IF p_papel <> 'admin' THEN
+    DELETE FROM public.igreja_convites WHERE criado_por = p_user_id AND usado_em IS NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM public.igreja_membros WHERE igreja_id = v_igreja_id AND papel = 'admin'
+  ) THEN
+    RAISE EXCEPTION 'A igreja precisa ter pelo menos um administrador.';
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.alterar_papel_membro(UUID, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.alterar_papel_membro(UUID, TEXT) FROM anon;
+GRANT EXECUTE ON FUNCTION public.alterar_papel_membro(UUID, TEXT) TO authenticated;
+
+-- Remove só o VÍNCULO. A conta de login continua existindo: excluir a
+-- linha de auth.users apagaria as vendas/lançamentos da pessoa por
+-- ON DELETE CASCADE. Sem vínculo, minhas_igrejas() já volta vazio e a
+-- RLS nega os dados de negócio na hora — mesmo com o JWT antigo ainda
+-- válido. Única exceção: o fundador (igrejas.owner_user_id) continua lendo o
+-- id/nome da própria igreja pela policy membros_veem_propria_igreja.
+CREATE OR REPLACE FUNCTION public.remover_membro(p_user_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_igreja_id UUID;
+  v_papel_chamador TEXT;
+BEGIN
+  IF p_user_id = (SELECT auth.uid()) THEN
+    RAISE EXCEPTION 'Você não pode remover a si mesmo.';
+  END IF;
+
+  SELECT igreja_id INTO v_igreja_id
+  FROM public.igreja_membros WHERE user_id = (SELECT auth.uid());
+  IF v_igreja_id IS NULL THEN
+    RAISE EXCEPTION 'Nenhuma igreja associada à sua conta.';
+  END IF;
+
+  PERFORM 1 FROM public.igrejas WHERE id = v_igreja_id FOR UPDATE;
+
+  SELECT papel INTO v_papel_chamador
+  FROM public.igreja_membros
+  WHERE user_id = (SELECT auth.uid()) AND igreja_id = v_igreja_id;
+  IF v_papel_chamador IS DISTINCT FROM 'admin' THEN
+    RAISE EXCEPTION 'Apenas administradores podem remover membros.';
+  END IF;
+
+  DELETE FROM public.igreja_membros WHERE user_id = p_user_id AND igreja_id = v_igreja_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Membro não encontrado.';
+  END IF;
+
+  -- Mesmo motivo de alterar_papel_membro: convite em aberto de quem saiu morre junto.
+  DELETE FROM public.igreja_convites WHERE criado_por = p_user_id AND usado_em IS NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.remover_membro(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.remover_membro(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.remover_membro(UUID) TO authenticated;
+
+-- ============================================================
 -- ÍNDICES para performance
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_igreja_membros_user_id ON igreja_membros(user_id);
@@ -805,3 +1301,4 @@ CREATE INDEX IF NOT EXISTS idx_tab_contas_receber_pago ON tab_contas_receber(pag
 CREATE INDEX IF NOT EXISTS idx_tab_contas_pagar_igreja_id ON tab_contas_pagar(igreja_id);
 CREATE INDEX IF NOT EXISTS idx_tab_fechamento_igreja_data ON tab_fechamento_caixa(igreja_id, data);
 CREATE INDEX IF NOT EXISTS idx_tab_reaberturas_igreja_id ON tab_reaberturas_caixa(igreja_id);
+CREATE INDEX IF NOT EXISTS idx_igreja_convites_igreja_id ON igreja_convites(igreja_id);

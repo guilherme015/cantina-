@@ -6,6 +6,8 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+export type Papel = "admin" | "operador"
+
 export interface Database {
   public: {
     Tables: {
@@ -34,18 +36,24 @@ export interface Database {
           created_at: string
           igreja_id: string
           user_id: string
-          papel: "owner" | "membro"
+          papel: Papel
+          email: string | null
         }
+        // O client não escreve em igreja_membros (sem policy nem GRANT de
+        // escrita) — entrar numa igreja é pelo trigger de cadastro/convite e
+        // mudar papel é pela RPC alterar_papel_membro. Insert/Update ficam
+        // aqui só pra satisfazer o formato do supabase-js.
         Insert: {
           id?: string
           created_at?: string
           igreja_id: string
           user_id: string
-          papel?: "owner" | "membro"
+          papel?: Papel
+          email?: string | null
         }
         Update: {
           id?: string
-          papel?: "owner" | "membro"
+          papel?: Papel
         }
         Relationships: [
           {
@@ -56,6 +64,30 @@ export interface Database {
             referencedColumns: ["id"]
           },
         ]
+      }
+      igreja_convites: {
+        Row: {
+          id: string
+          created_at: string
+          igreja_id: string
+          criado_por: string | null
+          papel: Papel
+          expira_em: string
+          usado_em: string | null
+          usado_por: string | null
+        }
+        // token_hash fica de fora de propósito: o client nunca lê nem grava o
+        // hash (criar_convite gera o token e grava o hash no banco).
+        Insert: {
+          id?: string
+          igreja_id: string
+          papel: Papel
+          expira_em: string
+        }
+        Update: {
+          id?: string
+        }
+        Relationships: []
       }
       tab_itens: {
         Row: {
@@ -459,6 +491,26 @@ export interface Database {
       [_ in never]: never
     }
     Functions: {
+      baixar_conta_receber: {
+        Args: { p_conta_id: string; p_forma_pagamento: string; p_valor_esperado: number }
+        Returns: void
+      }
+      criar_convite: {
+        Args: { p_papel: string }
+        Returns: string
+      }
+      consultar_convite: {
+        Args: { p_token: string }
+        Returns: { nome_igreja: string; papel: Papel }[]
+      }
+      alterar_papel_membro: {
+        Args: { p_user_id: string; p_papel: string }
+        Returns: void
+      }
+      remover_membro: {
+        Args: { p_user_id: string }
+        Returns: void
+      }
       reabrir_caixa: {
         Args: {
           p_data: string
@@ -487,6 +539,7 @@ export interface Database {
 
 export type Igreja = Database["public"]["Tables"]["igrejas"]["Row"]
 export type IgrejaMembro = Database["public"]["Tables"]["igreja_membros"]["Row"]
+export type IgrejaConvite = Database["public"]["Tables"]["igreja_convites"]["Row"]
 export type Item = Database["public"]["Tables"]["tab_itens"]["Row"]
 export type CardapioDia = Database["public"]["Tables"]["tab_cardapio_dia"]["Row"]
 export type Venda = Database["public"]["Tables"]["tab_vendas"]["Row"]

@@ -1,10 +1,12 @@
 import { Header } from "@/components/layout/header"
+import { exigirAdmin } from "@/lib/auth-contexto"
 import { listarProdutos } from "@/app/actions/produtos"
 import { getCardapioHoje } from "@/app/actions/cardapio"
 import { hojeBR } from "@/lib/data-br"
 import { CardapioClient } from "./cardapio-client"
 
 export default async function CardapioPage() {
+  await exigirAdmin()
   const [produtos, cardapioHoje] = await Promise.all([
     listarProdutos(),
     getCardapioHoje(),

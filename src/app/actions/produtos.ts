@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { MENSAGEM_SO_ADMIN } from "@/lib/papel"
 import type { Item } from "@/types/database"
 
 export async function listarProdutos(): Promise<Item[]> {
@@ -20,9 +21,10 @@ export async function listarProdutos(): Promise<Item[]> {
 }
 
 export async function criarProduto(formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const nome = formData.get("nome") as string
   const preco = parseFloat(formData.get("preco") as string)
@@ -45,9 +47,10 @@ export async function criarProduto(formData: FormData): Promise<{ error?: string
 }
 
 export async function atualizarProduto(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const nome = formData.get("nome") as string
   const preco = parseFloat(formData.get("preco") as string)
@@ -68,9 +71,10 @@ export async function atualizarProduto(id: string, formData: FormData): Promise<
 }
 
 export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { error } = await supabase
     .from("tab_itens")
@@ -85,9 +89,10 @@ export async function toggleProdutoAtivo(id: string, ativo: boolean): Promise<{ 
 }
 
 export async function excluirProduto(id: string): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { error } = await supabase
     .from("tab_itens")

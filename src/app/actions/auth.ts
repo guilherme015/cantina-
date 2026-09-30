@@ -21,14 +21,32 @@ export async function login(formData: FormData) {
   redirect("/vendas")
 }
 
+// Volta pro /login preservando o link de convite (quando houver) — sem isso,
+// um erro de senha fraca jogaria a pessoa de volta no cadastro de igreja nova
+// e ela perderia o convite que tinha na URL.
+function voltarAoLogin(erro: string, convite: string | null): never {
+  const base = convite ? `/login?convite=${encodeURIComponent(convite)}&` : "/login?"
+  redirect(`${base}error=${erro}`)
+}
+
 export async function signup(formData: FormData) {
   const supabase = await createClient()
 
   const email = formData.get("email") as string
   const password = formData.get("password")
   const nomeIgreja = (formData.get("nomeIgreja") as string)?.trim()
+  const convite = (formData.get("convite") as string | null)?.trim() || null
 
-  if (!nomeIgreja) {
+  if (convite) {
+    // Confere o link antes de criar a conta pra dar uma mensagem decente. O
+    // trigger de cadastro confere de novo (é ele que garante contra corrida):
+    // se o convite for usado por outra pessoa entre esta checagem e o
+    // INSERT, o cadastro inteiro é abortado no banco.
+    const { data: conviteValido } = await supabase.rpc("consultar_convite", { p_token: convite })
+    if (!conviteValido || conviteValido.length === 0) {
+      redirect("/login?error=convite_invalido")
+    }
+  } else if (!nomeIgreja) {
     redirect("/login?error=nome_igreja_obrigatorio")
   }
 
@@ -37,28 +55,39 @@ export async function signup(formData: FormData) {
   // o tipo porque um POST manual pode mandar qualquer coisa no campo (ou
   // nada), e senhaAtendeCriterios espera string.
   if (typeof password !== "string" || !senhaAtendeCriterios(password)) {
-    redirect("/login?error=senha_fraca")
+    voltarAoLogin("senha_fraca", convite)
   }
 
-  // A criação da igreja e do vínculo de owner acontece num trigger no banco
+  // A criação da igreja (ou a entrada numa igreja existente, quando vem
+  // `convite`) e do vínculo acontece num trigger no banco
   // (trg_criar_igreja_no_cadastro, disparado por AFTER INSERT ON auth.users),
   // atômico com a criação do usuário — não dá pra fazer isso aqui na
   // server action porque o client não tem mais permissão de INSERT em
-  // igrejas/igreja_membros (ver supabase/schema.sql).
+  // igrejas/igreja_membros (ver supabase/schema.sql). Com convite, o papel
+  // vem do convite, nunca do que o client mandar.
   const { error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { nome_igreja: nomeIgreja } },
+    options: { data: convite ? { convite } : { nome_igreja: nomeIgreja } },
   })
 
   if (error) {
     if (error.code === "user_already_exists") {
-      redirect("/login?error=email_ja_cadastrado")
+      voltarAoLogin("email_ja_cadastrado", convite)
     }
     if (error.code === "weak_password") {
-      redirect("/login?error=senha_fraca")
+      voltarAoLogin("senha_fraca", convite)
     }
-    redirect("/login?error=erro_cadastro")
+    if (convite) {
+      // O trigger aborta o cadastro se o convite deixou de valer no meio do
+      // caminho (usado/expirado/revogado) — o GoTrue devolve isso como um
+      // erro genérico de banco. Distingue pra não culpar o e-mail.
+      const { data: aindaValido } = await supabase.rpc("consultar_convite", { p_token: convite })
+      if (!aindaValido || aindaValido.length === 0) {
+        redirect("/login?error=convite_invalido")
+      }
+    }
+    voltarAoLogin("erro_cadastro", convite)
   }
 
   redirect("/vendas")

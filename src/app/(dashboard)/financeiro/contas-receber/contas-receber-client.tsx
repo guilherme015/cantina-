@@ -27,9 +27,12 @@ import type { ContaReceber } from "@/types/database"
 
 interface Props {
   contas: ContaReceber[]
+  // Editar/excluir conta é só admin (#53); operador só dá baixa. A action e o
+  // banco barram de qualquer forma — aqui só não mostra botão que daria erro.
+  ehAdmin: boolean
 }
 
-export function ContasReceberClient({ contas }: Props) {
+export function ContasReceberClient({ contas, ehAdmin }: Props) {
   const [baixando, setBaixando] = useState<ContaReceber | null>(null)
   const [editando, setEditando] = useState<ContaReceber | null>(null)
   const [formaPagamento, setFormaPagamento] = useState("dinheiro")
@@ -44,7 +47,7 @@ export function ContasReceberClient({ contas }: Props) {
   function handleBaixar() {
     if (!baixando) return
     startTransition(async () => {
-      const result = await baixarContaReceber(baixando.id, formaPagamento)
+      const result = await baixarContaReceber(baixando.id, formaPagamento, baixando.valor_devido)
       if (result.error) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
       } else {
@@ -143,23 +146,27 @@ export function ContasReceberClient({ contas }: Props) {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-orange-600">{formatCurrency(c.valor_devido)}</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setEditando(c)}
-                      disabled={isPending}
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-red-600 hover:text-red-700"
-                      onClick={() => handleExcluir(c.id)}
-                      disabled={isPending}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
+                    {ehAdmin && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEditando(c)}
+                          disabled={isPending}
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-red-600 hover:text-red-700"
+                          onClick={() => handleExcluir(c.id)}
+                          disabled={isPending}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"

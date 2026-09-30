@@ -44,9 +44,11 @@ const FORMAS_PAGAMENTO: { value: FormaPagamento; label: string }[] = [
 
 interface Props {
   movimentacoes: ExtratoFinanceiro[]
+  // Editar/excluir movimentação é só admin (#53); operador só consulta.
+  ehAdmin: boolean
 }
 
-export function ExtratoClient({ movimentacoes }: Props) {
+export function ExtratoClient({ movimentacoes, ehAdmin }: Props) {
   const [filtroForma, setFiltroForma] = useState<FormaPagamento | "todos">("todos")
   const [editando, setEditando] = useState<ExtratoFinanceiro | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -201,7 +203,7 @@ export function ExtratoClient({ movimentacoes }: Props) {
                       <span className={`font-semibold ${m.tipo_movimentacao === "entrada" ? "text-green-600" : "text-red-600"}`}>
                         {m.tipo_movimentacao === "entrada" ? "+" : "-"}{formatCurrency(m.valor)}
                       </span>
-                      {editavel ? (
+                      {editavel && ehAdmin ? (
                         <div className="flex items-center gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditando(m)}>
                             <Pencil className="w-4 h-4" />
@@ -212,7 +214,11 @@ export function ExtratoClient({ movimentacoes }: Props) {
                         </div>
                       ) : (
                         <span
-                          title="Vendas são canceladas na tela de Vendas; recebimento de fiado é gerido em Contas a Receber; despesas de antes da atualização não têm link com Contas a Pagar. Não é possível editar por aqui."
+                          title={
+                            ehAdmin
+                              ? "Vendas são canceladas na tela de Vendas; recebimento de fiado é gerido em Contas a Receber; despesas de antes da atualização não têm link com Contas a Pagar. Não é possível editar por aqui."
+                              : "Apenas administradores podem editar ou excluir movimentações."
+                          }
                           className="flex items-center gap-1 text-[var(--muted-foreground)]"
                         >
                           <Lock className="w-4 h-4" />

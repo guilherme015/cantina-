@@ -6,6 +6,7 @@ import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { MENSAGEM_SO_ADMIN } from "@/lib/papel"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -214,9 +215,10 @@ export async function criarVenda(dados: {
 }
 
 export async function cancelarVenda(id: string): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: venda } = await supabase
     .from("tab_vendas")

@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
 import { logout } from "@/app/actions/auth"
+import type { Papel } from "@/lib/papel"
 
 const navItems = [
   {
@@ -33,11 +34,13 @@ const navItems = [
   },
   {
     label: "Cardápio do Dia",
+    somenteAdmin: true,
     href: "/cadastros/cardapio",
     icon: Calendar,
   },
   {
     label: "Produtos",
+    somenteAdmin: true,
     href: "/cadastros/produtos",
     icon: Package,
   },
@@ -57,11 +60,13 @@ const navItems = [
   },
   {
     label: "Contas a Pagar",
+    somenteAdmin: true,
     href: "/financeiro/contas-pagar",
     icon: ArrowUpCircle,
   },
   {
     label: "Fechamento do Dia",
+    somenteAdmin: true,
     href: "/financeiro/fechamento",
     icon: Lock,
   },
@@ -76,7 +81,17 @@ const navItems = [
   },
 ]
 
-export function Sidebar() {
+// Operador só vê o que pode usar (#53): o resto é só admin no banco também
+// (RLS/RPC) — esconder o link é navegação, não segurança. Os separadores que
+// sobram colados ou nas pontas depois do filtro saem junto.
+function itensVisiveis(papel: Papel) {
+  const permitidos = navItems.filter((item) => !item.somenteAdmin || papel === "admin")
+  return permitidos.filter(
+    (item, i) => !item.separator || (i > 0 && i < permitidos.length - 1 && !permitidos[i - 1].separator)
+  )
+}
+
+export function Sidebar({ papel }: { papel: Papel }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
 
@@ -125,7 +140,7 @@ export function Sidebar() {
 
         <nav className="flex-1 px-3 py-4 overflow-y-auto">
           <ul className="space-y-1">
-            {navItems.map((item, index) => {
+            {itensVisiveis(papel).map((item, index) => {
               if (item.separator) {
                 return <li key={index} className="py-2"><Separator /></li>
               }

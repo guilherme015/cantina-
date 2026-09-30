@@ -5,12 +5,13 @@ import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { MENSAGEM_SO_ADMIN } from "@/lib/papel"
 import { cancelarVenda } from "@/app/actions/vendas"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
 export async function listarContasPagar(): Promise<ContaPagar[]> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
-  if (!user || !igrejaId) return []
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
+  if (!user || !igrejaId || papel !== "admin") return []
 
   const { data } = await supabase
     .from("tab_contas_pagar")
@@ -22,9 +23,10 @@ export async function listarContasPagar(): Promise<ContaPagar[]> {
 }
 
 export async function criarContaPagar(formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const descricao = formData.get("descricao") as string
   const valor = parseFloat(formData.get("valor") as string)
@@ -51,9 +53,10 @@ export async function criarContaPagar(formData: FormData): Promise<{ error?: str
 }
 
 export async function editarContaPagar(id: string, formData: FormData): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const descricao = formData.get("descricao") as string
   const valor = parseFloat(formData.get("valor") as string)
@@ -81,9 +84,10 @@ export async function editarContaPagar(id: string, formData: FormData): Promise<
 }
 
 export async function excluirContaPagar(id: string): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: linhas, error } = await supabase
     .from("tab_contas_pagar")
@@ -102,9 +106,10 @@ export async function excluirContaPagar(id: string): Promise<{ error?: string; s
 }
 
 export async function pagarConta(id: string): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: conta } = await supabase
     .from("tab_contas_pagar")
@@ -176,9 +181,10 @@ export async function listarContasReceber(): Promise<ContaReceber[]> {
 }
 
 export async function editarContaReceber(id: string, dados: { cliente: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   if (!dados.cliente || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
     return { error: "Preencha todos os campos obrigatórios" }
@@ -206,9 +212,10 @@ export async function editarContaReceber(id: string, dados: { cliente: string; v
 }
 
 export async function excluirContaReceber(id: string): Promise<{ error?: string; success?: boolean; vendaCancelada?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: conta } = await supabase
     .from("tab_contas_receber")
@@ -288,168 +295,34 @@ export async function excluirContaReceber(id: string): Promise<{ error?: string;
   return { success: true, vendaCancelada }
 }
 
-export async function baixarContaReceber(id: string, formaPagamento: string): Promise<{ error?: string; success?: boolean }> {
+// #53: a baixa inteira (marcar a conta, sincronizar o status da venda e lançar
+// a entrada no extrato) é a RPC baixar_conta_receber — uma transação só, com a
+// venda e a conta travadas (FOR UPDATE). O operador não tem UPDATE direto em
+// contas/vendas, então não dá pra ser uma sequência de chamadas daqui; e a
+// transação resolve sozinha o que este arquivo tratava na mão: conta paga sem
+// entrada no extrato, corrida com cancelarVenda, edição de valor no meio da
+// baixa e caixa fechado entre os passos (o trigger de extrato levanta a
+// exceção e tudo é desfeito, conta e venda incluídas).
+export async function baixarContaReceber(id: string, formaPagamento: string, valorEsperado: number): Promise<{ error?: string; success?: boolean }> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
-  const { data: conta } = await supabase
-    .from("tab_contas_receber")
-    .select("*")
-    .eq("id", id)
-    .eq("igreja_id", igrejaId)
-    .single()
-
-  if (!conta) return { error: "Conta não encontrada" }
-  if ((conta as ContaReceber).pago) return { error: "Esta conta já foi recebida" }
-
-  // Bloqueia recebimento de fiado cuja venda de origem foi cancelada.
-  const vendaId = (conta as ContaReceber).venda_id
-  // Guardado pra usar mais abaixo, no ramo de corrida com cancelarVenda —
-  // total não muda depois que a venda é criada, então esta mesma leitura
-  // continua válida lá (só o status pode ter mudado entre os dois pontos).
-  let vendaTotalNoInicio: number | undefined
-  if (vendaId) {
-    const { data: venda } = await supabase
-      .from("tab_vendas")
-      .select("status, total")
-      .eq("id", vendaId)
-      .eq("igreja_id", igrejaId)
-      .single()
-
-    if (venda?.status === "cancelado") {
-      return { error: "A venda desta conta foi cancelada. Não é possível receber." }
-    }
-    vendaTotalNoInicio = venda?.total
-  }
-
-  if (await diaFechado(supabase, igrejaId, hojeBR())) {
-    return { error: "O caixa de hoje já foi fechado. Não é possível registrar recebimentos." }
-  }
-
-  // .eq("pago", false) torna esse update atômico — mesma razão do
-  // pagarConta: com mais de um membro na mesma igreja, dois recebimentos
-  // quase simultâneos do mesmo fiado não podem gerar duas entradas.
-  //
-  // .eq("valor_devido", c.valor_devido) trava o valor no momento exato da
-  // baixa (#13): sem isso, um editarContaReceber concorrente entre a
-  // leitura acima e este update deixaria `c.valor_devido` (usado mais
-  // abaixo pra decidir apagar-ou-desvincular a conta numa corrida com
-  // cancelarVenda, e pro valor lançado no extrato) desatualizado em
-  // relação ao valor de verdade que acabou de ser recebido.
-  const { data: linhas, error } = await supabase
-    .from("tab_contas_receber")
-    .update({
-      pago: true,
-      data_baixa: hojeBR(),
-      forma_pagamento_baixa: formaPagamento,
-    })
-    .eq("id", id)
-    .eq("igreja_id", igrejaId)
-    .eq("pago", false)
-    .eq("valor_devido", (conta as ContaReceber).valor_devido)
-    .select("id")
-
-  if (error) return { error: mensagemDeErro(error) }
-  if (!linhas || linhas.length === 0) {
-    return { error: "Esta conta foi alterada ou já recebida por outra pessoa. Atualize a página e tente de novo." }
-  }
-
-  const c = conta as ContaReceber
-
-  // Sincroniza o status da venda de origem: sem isso, a tela de Vendas
-  // continua mostrando "Fiado" pra sempre mesmo depois do cliente pagar,
-  // já que criarVenda grava status "pendente" e nada mais atualizava esse
-  // campo depois.
-  //
-  // .neq("status", "cancelado") torna esse update atômico contra uma
-  // corrida com cancelarVenda: sem essa trava, cancelar e receber a mesma
-  // venda ao mesmo tempo pode deixar a venda "pago" sem entrada no extrato
-  // (o cancelamento apaga o lançamento que este fluxo acabou de criar) — a
-  // checagem de venda cancelada mais acima (linhas ~273-285) só cobre o
-  // instante da leitura, não protege contra um cancelamento concorrente.
-  //
-  // É "!= cancelado" e não "== pendente" de propósito: se este mesmo bloco
-  // já rodou uma vez com sucesso (venda virou "pago") e o rollback do
-  // errExtrato logo abaixo falhar silenciosamente ao tentar voltar pra
-  // "pendente", uma nova tentativa de receber com "== pendente" nunca mais
-  // bateria — o fiado ficaria travado pra sempre com esse erro. "pago" já
-  // sendo o valor é só um no-op idempotente.
-  if (c.venda_id) {
-    const { data: vendaAtualizada, error: errVenda } = await supabase
-      .from("tab_vendas")
-      .update({ status: "pago" })
-      .eq("id", c.venda_id)
-      .eq("igreja_id", igrejaId)
-      .neq("status", "cancelado")
-      .select("id")
-
-    if (errVenda) {
-      await supabase
-        .from("tab_contas_receber")
-        .update({ pago: false, data_baixa: null, forma_pagamento_baixa: null })
-        .eq("id", id)
-        .eq("igreja_id", igrejaId)
-      return { error: mensagemDeErro(errVenda) }
-    }
-    if (!vendaAtualizada || vendaAtualizada.length === 0) {
-      // Só chega aqui se a venda estiver "cancelado" (única condição que o
-      // neq acima rejeita) — ou seja, cancelarVenda venceu a corrida. Ela
-      // tentou apagar/desvincular esta conta a receber, mas nesse instante
-      // `pago` ainda não tinha virado true (update lá em cima ainda não
-      // tinha commitado no momento do DELETE/UPDATE de cancelarVenda),
-      // então a conta sobreviveu com pago=true. #13: mesma trava de valor —
-      // se `valor_devido` ainda bate com o total da venda (não foi editada
-      // nesse meio tempo), apaga como antes. Se não bate, desvincula e
-      // desfaz a baixa em vez de apagar dinheiro sem relação com a venda
-      // cancelada (a conta volta a ficar em aberto, sem venda de origem).
-      const naoFoiEditada = vendaTotalNoInicio !== undefined &&
-        Math.round(vendaTotalNoInicio * 100) === Math.round(c.valor_devido * 100)
-
-      if (naoFoiEditada) {
-        await supabase
-          .from("tab_contas_receber")
-          .delete()
-          .eq("id", id)
-          .eq("igreja_id", igrejaId)
-          .eq("pago", true)
-      } else {
-        await supabase
-          .from("tab_contas_receber")
-          .update({ venda_id: null, pago: false, data_baixa: null, forma_pagamento_baixa: null })
-          .eq("id", id)
-          .eq("igreja_id", igrejaId)
-          .eq("pago", true)
-      }
-      return { error: "A venda desta conta foi cancelada. Não é possível receber." }
-    }
-  }
-
-  const { error: errExtrato } = await supabase.from("tab_extrato_financeiro").insert({
-    tipo_movimentacao: "entrada" as const,
-    forma_pagamento: formaPagamento as "dinheiro" | "pix" | "cartao" | "fiado",
-    valor: c.valor_devido,
-    descricao: `Recebimento fiado - ${c.cliente}`,
-    venda_id: c.venda_id,
-    user_id: user.id,
-    igreja_id: igrejaId,
-    data_hora: new Date().toISOString(),
+  const { error } = await supabase.rpc("baixar_conta_receber", {
+    p_conta_id: id,
+    p_forma_pagamento: formaPagamento,
+    // O valor que a tela mostrou ao operador: se a conta foi editada nesse
+    // meio tempo a RPC recusa, em vez de lançar no caixa um valor diferente
+    // do que foi cobrado.
+    p_valor_esperado: valorEsperado,
   })
 
-  if (errExtrato) {
-    // Mesmo caso do pagarConta: o caixa pode ter sido fechado por outro
-    // membro entre o UPDATE acima e este insert — desfaz a baixa (e o
-    // status da venda) em vez de deixar a conta recebida sem entrada no
-    // extrato.
-    if (c.venda_id) {
-      await supabase.from("tab_vendas").update({ status: "pendente" }).eq("id", c.venda_id).eq("igreja_id", igrejaId)
-    }
-    await supabase
-      .from("tab_contas_receber")
-      .update({ pago: false, data_baixa: null, forma_pagamento_baixa: null })
-      .eq("id", id)
-      .eq("igreja_id", igrejaId)
-    return { error: "O caixa foi fechado enquanto o recebimento era confirmado. Tente novamente." }
+  if (error) {
+    // RAISE EXCEPTION vem com code P0001 e mensagem já em português, pensada
+    // pro usuário final — não passa por mensagemDeErro() (mesmo padrão de
+    // fecharCaixa/reabrirCaixa).
+    if (error.code === "P0001") return { error: error.message }
+    return { error: mensagemDeErro(error) }
   }
 
   revalidatePath("/financeiro/contas-receber")
@@ -485,9 +358,10 @@ export async function editarMovimentacaoExtrato(
   id: string,
   dados: { valor: number; descricao: string }
 ): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   if (!dados.descricao || isNaN(dados.valor) || dados.valor <= 0) {
     return { error: "Preencha todos os campos obrigatórios" }
@@ -551,9 +425,10 @@ export async function editarMovimentacaoExtrato(
 }
 
 export async function excluirMovimentacaoExtrato(id: string): Promise<{ error?: string; success?: boolean }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: movimentacao } = await supabase
     .from("tab_extrato_financeiro")

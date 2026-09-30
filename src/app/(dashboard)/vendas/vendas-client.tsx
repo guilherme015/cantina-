@@ -30,6 +30,9 @@ import type { Item, FormaPagamento } from "@/types/database"
 interface Props {
   vendas: VendaComItens[]
   itensDisponiveis: Item[]
+  // Cancelar venda é só admin (#53) — a action e o banco barram de qualquer
+  // forma; aqui só não mostra um botão que sempre daria erro.
+  ehAdmin: boolean
 }
 
 const FORMAS_PAGAMENTO: { value: FormaPagamento; label: string }[] = [
@@ -59,7 +62,7 @@ interface CarrinhoItem {
   valor_unitario: number
 }
 
-export function VendasClient({ vendas, itensDisponiveis }: Props) {
+export function VendasClient({ vendas, itensDisponiveis, ehAdmin }: Props) {
   const [open, setOpen] = useState(false)
   const [carrinho, setCarrinho] = useState<CarrinhoItem[]>([])
   const [cliente, setCliente] = useState("")
@@ -155,11 +158,19 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
         <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
           <UtensilsCrossed className="w-5 h-5 shrink-0" />
           <span>
-            Nenhum produto no cardápio de hoje — as vendas ficam bloqueadas até você{" "}
-            <Link href="/cadastros/cardapio" className="font-semibold underline">
-              configurar o cardápio do dia
-            </Link>
-            .
+            {ehAdmin ? (
+              <>
+                Nenhum produto no cardápio de hoje — as vendas ficam bloqueadas até você{" "}
+                <Link href="/cadastros/cardapio" className="font-semibold underline">
+                  configurar o cardápio do dia
+                </Link>
+                .
+              </>
+            ) : (
+              // Operador não tem acesso à tela de Cardápio (#53) — o link só
+              // o mandaria de volta pra cá.
+              "Nenhum produto no cardápio de hoje — as vendas ficam bloqueadas até um administrador configurar o cardápio do dia."
+            )}
           </span>
         </div>
       )}
@@ -237,7 +248,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
                     )}>
                       {formatCurrency(v.total)}
                     </p>
-                    {v.status !== "cancelado" && (
+                    {ehAdmin && v.status !== "cancelado" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -292,10 +303,16 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
               {itensDisponiveis.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)] py-4 text-center">
                   Nenhum produto disponível.{" "}
-                  <Link href="/cadastros/cardapio" className="text-[var(--primary)] underline">
-                    Configure o cardápio do dia
-                  </Link>{" "}
-                  primeiro.
+                  {ehAdmin ? (
+                    <>
+                      <Link href="/cadastros/cardapio" className="text-[var(--primary)] underline">
+                        Configure o cardápio do dia
+                      </Link>{" "}
+                      primeiro.
+                    </>
+                  ) : (
+                    "Peça a um administrador para configurar o cardápio do dia."
+                  )}
                 </p>
               ) : (
                 <div className="grid grid-cols-2 gap-2">

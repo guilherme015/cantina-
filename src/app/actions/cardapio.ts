@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { MENSAGEM_SO_ADMIN } from "@/lib/papel"
 import { hojeBR } from "@/lib/data-br"
 
 export type CardapioHoje = {
@@ -44,9 +45,10 @@ export async function getCardapioHoje(): Promise<CardapioHoje | null> {
 }
 
 export async function salvarCardapioPorData(data: string, itemIds: string[]) {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   let { data: cardapio } = await supabase
     .from("tab_cardapio_dia")
@@ -137,9 +139,10 @@ export async function listarHistoricoCardapios(): Promise<CardapioHistoricoItem[
 // "ontem": a maioria das cantinas de igreja não abre todo dia (só domingo,
 // por exemplo), então "ontem" quase sempre estaria vazio.
 export async function copiarUltimoCardapio(): Promise<{ error?: string; success?: boolean; itemIds?: string[] }> {
-  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  const { supabase, user, igrejaId, papel } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
+  if (papel !== "admin") return { error: MENSAGEM_SO_ADMIN }
 
   const { data: ultimoCardapio, error: errBusca } = await supabase
     .from("tab_cardapio_dia")
