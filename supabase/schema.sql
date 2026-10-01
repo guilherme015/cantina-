@@ -1006,7 +1006,7 @@ REVOKE ALL ON FUNCTION public.reabrir_caixa(DATE, TEXT) FROM anon;
 GRANT EXECUTE ON FUNCTION public.reabrir_caixa(DATE, TEXT) TO authenticated;
 
 -- ============================================================
--- RPC: baixar_conta_receber(conta, forma_pagamento)
+-- RPC: baixar_conta_receber(conta, forma_pagamento, valor_esperado)
 --
 -- Dar baixa num fiado = marcar a conta como paga + sincronizar o status da
 -- venda + lançar a entrada no extrato. Antes isso eram 3 chamadas do client

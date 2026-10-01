@@ -2,6 +2,23 @@
 -- MIGRAÇÃO: papéis (admin/operador) + convite de membros (#53)
 -- Rodar UMA VEZ no SQL Editor do projeto Supabase que já tem o schema
 -- multi-igreja (supabase/migration-multi-igreja.sql já aplicada).
+-- Cole o ARQUIVO INTEIRO e clique em Run — não rode por partes.
+--
+-- POKA-YOKE: o script inteiro é UMA transação (BEGIN ... COMMIT) com
+-- guardas nas pontas:
+--   * ANTES: confere que é o projeto certo (tabelas/funções da migration
+--     multi-igreja existem, Postgres >= 15, nenhum papel estranho, nenhuma
+--     igreja que ficaria sem admin) e tira uma "foto" das contagens.
+--   * DEPOIS: confere que nenhuma linha sumiu, que todo papel é admin/
+--     operador, que toda igreja tem admin, que policies/funções/permissões
+--     esperadas existem (e as antigas sumiram) e roda um teste de fumaça
+--     com sessões simuladas (desfeito no fim).
+--   Se QUALQUER guarda falhar, dá erro e NADA é aplicado (rollback total).
+--   Se aparecer erro: não aplicou nada — corrija o que a mensagem pede e
+--   rode de novo. Se o editor ficar "preso" em transação abortada, rode
+--   ROLLBACK; numa aba nova.
+-- Também tem lock_timeout: se o app estiver segurando as tabelas, falha em
+-- 15s em vez de travar o app esperando — é só rodar de novo.
 --
 -- Depois de rodar este arquivo uma vez, supabase/schema.sql continua
 -- sendo a referência do estado do banco (ele já reflete o resultado
@@ -14,6 +31,70 @@
 -- hoje não existe convite, na prática todo usuário atual é `owner` →
 -- `admin`, então ninguém perde acesso com esta migração.
 -- ============================================================
+
+BEGIN;
+
+SET LOCAL lock_timeout = '15s';
+SET LOCAL statement_timeout = '120s';
+
+-- ============================================================
+-- 0. POKA-YOKE (antes): este é o projeto certo e está no estado esperado?
+-- ============================================================
+DO $$
+DECLARE
+  v_item TEXT;
+BEGIN
+  IF current_setting('server_version_num')::int < 150000 THEN
+    RAISE EXCEPTION 'POKA-YOKE: Postgres % é antigo demais (precisa de 15+, o schema usa SET NULL (coluna)). Projeto errado?', current_setting('server_version');
+  END IF;
+
+  FOREACH v_item IN ARRAY ARRAY[
+    'igrejas', 'igreja_membros', 'tab_itens', 'tab_cardapio_dia', 'tab_cardapio_dia_itens',
+    'tab_vendas', 'tab_vendas_itens', 'tab_extrato_financeiro', 'tab_contas_receber',
+    'tab_contas_pagar', 'tab_fechamento_caixa', 'tab_reaberturas_caixa'
+  ] LOOP
+    IF to_regclass('public.' || v_item) IS NULL THEN
+      RAISE EXCEPTION 'POKA-YOKE: falta a tabela public.%. Este não é o projeto certo, ou a migration-multi-igreja.sql ainda não foi aplicada. NADA foi alterado.', v_item;
+    END IF;
+  END LOOP;
+
+  IF to_regprocedure('private.minhas_igrejas()') IS NULL
+     OR to_regprocedure('private.chave_lock_fechamento(uuid,date)') IS NULL
+     OR to_regprocedure('public.fechar_caixa(date,numeric,numeric,text)') IS NULL
+     OR to_regprocedure('public.reabrir_caixa(date,text)') IS NULL
+     OR to_regprocedure('public.criar_igreja_no_cadastro()') IS NULL THEN
+    RAISE EXCEPTION 'POKA-YOKE: faltam funções da migration multi-igreja (minhas_igrejas / chave_lock_fechamento / fechar_caixa / reabrir_caixa / criar_igreja_no_cadastro). Rode supabase/migration-multi-igreja.sql primeiro. NADA foi alterado.';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM public.igreja_membros WHERE papel NOT IN ('owner', 'membro', 'admin', 'operador')) THEN
+    RAISE EXCEPTION 'POKA-YOKE: há igreja_membros.papel com valor inesperado (esperado owner/membro/admin/operador). Confira: SELECT papel, count(*) FROM igreja_membros GROUP BY 1. NADA foi alterado.';
+  END IF;
+
+  -- Igreja COM membros mas sem nenhum owner/admin ficaria sem ninguém que
+  -- gerencie a equipe depois da migração — melhor parar e decidir quem
+  -- promover do que seguir.
+  IF EXISTS (
+    SELECT 1 FROM public.igrejas i
+    WHERE EXISTS (SELECT 1 FROM public.igreja_membros m WHERE m.igreja_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM public.igreja_membros m WHERE m.igreja_id = i.id AND m.papel IN ('owner', 'admin'))
+  ) THEN
+    RAISE EXCEPTION 'POKA-YOKE: existe igreja com membros mas sem owner/admin. Promova alguém antes: UPDATE igreja_membros SET papel = ''owner'' WHERE user_id = ''<uuid>''. NADA foi alterado.';
+  END IF;
+END $$;
+
+-- "Foto" do antes: o bloco de verificação no fim compara com isto — esta
+-- migração não pode fazer nenhuma linha de dado sumir.
+CREATE TEMP TABLE _migracao_papeis_antes ON COMMIT DROP AS
+SELECT
+  (SELECT count(*) FROM public.igrejas) AS igrejas,
+  (SELECT count(*) FROM public.igreja_membros) AS membros,
+  (SELECT count(*) FROM public.tab_itens) AS itens,
+  (SELECT count(*) FROM public.tab_vendas) AS vendas,
+  (SELECT count(*) FROM public.tab_vendas_itens) AS vendas_itens,
+  (SELECT count(*) FROM public.tab_extrato_financeiro) AS extrato,
+  (SELECT count(*) FROM public.tab_contas_receber) AS contas_receber,
+  (SELECT count(*) FROM public.tab_contas_pagar) AS contas_pagar,
+  (SELECT count(*) FROM public.tab_fechamento_caixa) AS fechamentos;
 
 -- ============================================================
 -- 1. igreja_membros: papel admin/operador + e-mail (snapshot)
@@ -376,7 +457,7 @@ GRANT EXECUTE ON FUNCTION public.reabrir_caixa(DATE, TEXT) TO authenticated;
 -- ============================================================
 -- 5b. baixar_conta_receber
 -- ============================================================
--- RPC: baixar_conta_receber(conta, forma_pagamento)
+-- RPC: baixar_conta_receber(conta, forma_pagamento, valor_esperado)
 --
 -- Dar baixa num fiado = marcar a conta como paga + sincronizar o status da
 -- venda + lançar a entrada no extrato. Antes isso eram 3 chamadas do client
@@ -398,6 +479,10 @@ GRANT EXECUTE ON FUNCTION public.reabrir_caixa(DATE, TEXT) TO authenticated;
 -- SECURITY DEFINER porque o operador não tem UPDATE direto nessas tabelas;
 -- seguro porque a igreja vem de auth.uid() (nunca do cliente), os valores
 -- gravados vêm da própria conta e a forma só aceita dinheiro/pix/cartao.
+-- Rascunho antigo (2 argumentos) nunca foi aplicado num projeto real; o DROP é só
+-- pra garantir que ele não sobreviva como overload sem a checagem de valor.
+DROP FUNCTION IF EXISTS public.baixar_conta_receber(UUID, TEXT);
+
 CREATE OR REPLACE FUNCTION public.baixar_conta_receber(
   p_conta_id UUID,
   p_forma_pagamento TEXT,
@@ -758,3 +843,187 @@ $$;
 REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM anon;
 REVOKE ALL ON FUNCTION public.criar_igreja_no_cadastro() FROM authenticated;
+
+-- ============================================================
+-- 8. POKA-YOKE (depois): a migração fez o que devia e só isso?
+-- Qualquer RAISE aqui desfaz a transação inteira (nada fica aplicado).
+-- ============================================================
+DO $$
+DECLARE
+  v_antes RECORD;
+  v_item TEXT;
+  v_admin UUID;
+  v_estranho UUID := gen_random_uuid();
+  v_token TEXT;
+  v_n BIGINT;
+  v_pode_trocar_role BOOLEAN := true;
+  v_fumaca_rodou BOOLEAN := false;
+BEGIN
+  SELECT * INTO v_antes FROM _migracao_papeis_antes;
+
+  -- 8.1 nenhuma linha de dado SUMIU (só "<": o app pode ter gravado uma venda
+  -- nova entre a foto e aqui — isso é normal; sumir linha é que não pode)
+  IF (SELECT count(*) FROM public.igrejas) < v_antes.igrejas
+     OR (SELECT count(*) FROM public.igreja_membros) < v_antes.membros
+     OR (SELECT count(*) FROM public.tab_itens) < v_antes.itens
+     OR (SELECT count(*) FROM public.tab_vendas) < v_antes.vendas
+     OR (SELECT count(*) FROM public.tab_vendas_itens) < v_antes.vendas_itens
+     OR (SELECT count(*) FROM public.tab_extrato_financeiro) < v_antes.extrato
+     OR (SELECT count(*) FROM public.tab_contas_receber) < v_antes.contas_receber
+     OR (SELECT count(*) FROM public.tab_contas_pagar) < v_antes.contas_pagar
+     OR (SELECT count(*) FROM public.tab_fechamento_caixa) < v_antes.fechamentos THEN
+    RAISE EXCEPTION 'POKA-YOKE: alguma tabela ficou com MENOS linhas do que antes da migração — abortando (rollback).';
+  END IF;
+
+  -- 8.2 papéis novos, e toda igreja com membros tem admin
+  IF EXISTS (SELECT 1 FROM public.igreja_membros WHERE papel NOT IN ('admin', 'operador')) THEN
+    RAISE EXCEPTION 'POKA-YOKE: sobrou papel que não é admin/operador.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.igrejas i
+    WHERE EXISTS (SELECT 1 FROM public.igreja_membros m WHERE m.igreja_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM public.igreja_membros m WHERE m.igreja_id = i.id AND m.papel = 'admin')
+  ) THEN
+    RAISE EXCEPTION 'POKA-YOKE: alguma igreja ficou sem administrador.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.igreja_membros WHERE email IS NULL AND user_id IN (SELECT id FROM auth.users WHERE email IS NOT NULL)) THEN
+    RAISE EXCEPTION 'POKA-YOKE: backfill do e-mail em igreja_membros ficou incompleto.';
+  END IF;
+
+  -- 8.3 policies novas existem; as antigas (acesso total pra todo membro) sumiram
+  FOREACH v_item IN ARRAY ARRAY[
+    'tab_itens.admins_gerenciam_itens', 'tab_cardapio_dia.admins_gerenciam_cardapio',
+    'tab_cardapio_dia_itens.admins_gerenciam_cardapio_itens', 'tab_contas_pagar.admins_gerenciam_contas_pagar',
+    'tab_vendas.membros_criam_vendas', 'tab_vendas.admins_gerenciam_vendas',
+    'tab_vendas.operador_desfaz_propria_venda_sem_lancamento', 'tab_vendas_itens.membros_criam_vendas_itens',
+    'tab_vendas_itens.admins_gerenciam_vendas_itens', 'tab_extrato_financeiro.membros_lancam_entrada_extrato',
+    'tab_extrato_financeiro.admins_gerenciam_extrato', 'tab_contas_receber.membros_criam_contas_receber',
+    'tab_contas_receber.admins_gerenciam_contas_receber', 'igreja_convites.admins_veem_convites',
+    'igreja_convites.admins_revogam_convites'
+  ] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = split_part(v_item, '.', 1) AND policyname = split_part(v_item, '.', 2)
+    ) THEN
+      RAISE EXCEPTION 'POKA-YOKE: policy esperada não existe: %', v_item;
+    END IF;
+  END LOOP;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND policyname IN (
+      'membros_igreja_itens', 'membros_igreja_cardapio', 'membros_igreja_cardapio_itens',
+      'membros_igreja_vendas', 'membros_igreja_vendas_itens', 'membros_igreja_extrato',
+      'membros_igreja_contas_receber', 'membros_igreja_contas_pagar'
+    )
+  ) THEN
+    RAISE EXCEPTION 'POKA-YOKE: sobrou policy antiga que dá acesso total a qualquer membro (membros_igreja_*).';
+  END IF;
+
+  -- 8.4 RLS ligada em tudo que importa
+  IF EXISTS (
+    SELECT 1 FROM pg_class
+    WHERE oid IN ('public.igreja_convites'::regclass, 'public.igreja_membros'::regclass, 'public.tab_vendas'::regclass,
+                  'public.tab_contas_receber'::regclass, 'public.tab_contas_pagar'::regclass)
+      AND NOT relrowsecurity
+  ) THEN
+    RAISE EXCEPTION 'POKA-YOKE: RLS desligada em alguma tabela sensível.';
+  END IF;
+
+  -- 8.5 permissões de execução: funções de papel só pra authenticated (nunca anon/PUBLIC)
+  FOREACH v_item IN ARRAY ARRAY[
+    'public.criar_convite(text)', 'public.alterar_papel_membro(uuid,text)', 'public.remover_membro(uuid)',
+    'public.baixar_conta_receber(uuid,text,numeric)', 'public.fechar_caixa(date,numeric,numeric,text)',
+    'public.reabrir_caixa(date,text)'
+  ] LOOP
+    IF NOT has_function_privilege('authenticated', v_item::regprocedure, 'EXECUTE')
+       OR has_function_privilege('anon', v_item::regprocedure, 'EXECUTE') THEN
+      RAISE EXCEPTION 'POKA-YOKE: permissão de execução errada em % (authenticated deve poder, anon não).', v_item;
+    END IF;
+  END LOOP;
+  IF NOT has_function_privilege('anon', 'public.consultar_convite(text)'::regprocedure, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POKA-YOKE: anon precisa poder consultar_convite (tela de cadastro por convite).';
+  END IF;
+  IF has_function_privilege('anon', 'public.criar_igreja_no_cadastro()'::regprocedure, 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.criar_igreja_no_cadastro()'::regprocedure, 'EXECUTE') THEN
+    RAISE EXCEPTION 'POKA-YOKE: criar_igreja_no_cadastro não pode ser executável como RPC.';
+  END IF;
+  IF to_regprocedure('public.baixar_conta_receber(uuid,text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'POKA-YOKE: sobrou o overload antigo de baixar_conta_receber (2 argumentos).';
+  END IF;
+
+  -- 8.6 ninguém escreve direto em igreja_membros / igreja_convites (só RPC)
+  IF has_table_privilege('authenticated', 'public.igreja_membros', 'INSERT, UPDATE, DELETE')
+     OR has_table_privilege('anon', 'public.igreja_membros', 'INSERT, UPDATE, DELETE')
+     OR has_table_privilege('authenticated', 'public.igreja_convites', 'INSERT, UPDATE')
+     OR has_table_privilege('anon', 'public.igreja_convites', 'SELECT, INSERT, UPDATE, DELETE') THEN
+    RAISE EXCEPTION 'POKA-YOKE: alguém ainda tem escrita direta em igreja_membros/igreja_convites.';
+  END IF;
+
+  -- 8.7 teste de fumaça com sessões simuladas — tudo dentro de um sub-bloco
+  --     que termina em exceção própria, então NADA do que ele faz fica gravado
+  --     (nem o convite de teste, nem o SET ROLE).
+  SELECT user_id INTO v_admin FROM public.igreja_membros WHERE papel = 'admin' ORDER BY created_at LIMIT 1;
+  IF v_admin IS NOT NULL THEN
+    BEGIN
+      -- Limpa os convites em aberto dessa igreja SÓ dentro do sub-bloco (é
+      -- desfeito no fim): senão o limite de 20 convites abertos de
+      -- criar_convite derrubaria o teste numa reexecução com o app em uso.
+      DELETE FROM public.igreja_convites
+      WHERE usado_em IS NULL AND igreja_id = (SELECT igreja_id FROM public.igreja_membros WHERE user_id = v_admin);
+
+      BEGIN
+        EXECUTE 'SET LOCAL ROLE authenticated';
+      EXCEPTION WHEN insufficient_privilege THEN
+        v_pode_trocar_role := false;
+      END;
+
+      IF v_pode_trocar_role THEN
+        v_fumaca_rodou := true;
+        -- admin real: consegue criar convite e vê os próprios dados
+        PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
+        PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+        v_token := public.criar_convite('operador');
+        IF v_token IS NULL OR length(v_token) <> 64 THEN
+          RAISE EXCEPTION 'POKA-YOKE (fumaça): admin não conseguiu gerar convite válido.';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM public.consultar_convite(v_token)) THEN
+          RAISE EXCEPTION 'POKA-YOKE (fumaça): convite recém-criado não é reconhecido.';
+        END IF;
+        IF (SELECT count(*) FROM public.igreja_membros) < 1 THEN
+          RAISE EXCEPTION 'POKA-YOKE (fumaça): admin não enxerga a própria equipe.';
+        END IF;
+
+        -- usuário sem vínculo: não vê nada de negócio nem cria convite
+        PERFORM set_config('request.jwt.claim.sub', v_estranho::text, true);
+        PERFORM set_config('request.jwt.claims', json_build_object('sub', v_estranho, 'role', 'authenticated')::text, true);
+        SELECT (SELECT count(*) FROM public.tab_vendas) + (SELECT count(*) FROM public.tab_contas_pagar)
+             + (SELECT count(*) FROM public.tab_itens) + (SELECT count(*) FROM public.igreja_convites)
+          INTO v_n;
+        IF v_n <> 0 THEN
+          RAISE EXCEPTION 'POKA-YOKE (fumaça): usuário sem vínculo enxerga % linhas de dados de igreja.', v_n;
+        END IF;
+        BEGIN
+          PERFORM public.criar_convite('admin');
+          RAISE EXCEPTION 'POKA-YOKE (fumaça): usuário sem vínculo conseguiu criar convite.';
+        EXCEPTION WHEN raise_exception THEN
+          IF SQLERRM LIKE 'POKA-YOKE%' THEN RAISE; END IF;  -- falha de verdade: propaga
+          NULL;                                              -- recusa esperada ("Apenas administradores...")
+        END;
+      END IF;
+
+      RAISE EXCEPTION USING ERRCODE = 'P9999', MESSAGE = 'fumaca-ok';  -- desfaz o sub-bloco
+    EXCEPTION WHEN SQLSTATE 'P9999' THEN
+      NULL;
+    END;
+  END IF;
+
+  IF NOT v_fumaca_rodou THEN
+    RAISE WARNING 'POKA-YOKE: o TESTE DE FUMAÇA NÃO RODOU (sem admin cadastrado, ou este usuário não pode trocar de role). As checagens estruturais 8.1–8.6 passaram, mas a simulação de sessões foi PULADA — confira à mão: logado como operador, tente cancelar uma venda.';
+  END IF;
+  RAISE NOTICE 'POKA-YOKE: verificações estruturais OK; teste de fumaça: %. % membro(s) com papel — o COMMIT segue.',
+    CASE WHEN v_fumaca_rodou THEN 'rodou e passou' ELSE 'PULADO (veja o aviso acima)' END,
+    (SELECT count(*) FROM public.igreja_membros);
+END $$;
+
+COMMIT;
