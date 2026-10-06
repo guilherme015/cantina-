@@ -76,7 +76,7 @@ const navItems = [
   },
 ]
 
-export function Sidebar() {
+export function Sidebar({ email }: { email: string | null }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
 
@@ -98,6 +98,14 @@ export function Sidebar() {
           </div>
           <span className="text-base font-bold text-[var(--foreground)]">Cantina+</span>
         </div>
+        {email && (
+          <span
+            title={email}
+            className="ml-auto min-w-0 truncate text-xs text-[var(--muted-foreground)]"
+          >
+            {email}
+          </span>
+        )}
       </div>
 
       {/* Backdrop mobile */}
@@ -112,7 +120,9 @@ export function Sidebar() {
       <aside
         className={cn(
           "fixed left-0 top-0 h-screen w-[240px] bg-white border-r border-[var(--border)] flex flex-col z-40 transition-transform duration-200",
-          "max-lg:top-14 max-lg:h-[calc(100vh-3.5rem)]",
+          // dvh, não vh: no celular 100vh inclui a área da barra de endereço,
+          // e o botão "Sair" (rodapé do menu) ficava cortado pra fora da tela.
+          "max-lg:top-14 max-lg:h-[calc(100dvh-3.5rem)]",
           open ? "translate-x-0" : "max-lg:-translate-x-full"
         )}
       >
@@ -155,6 +165,14 @@ export function Sidebar() {
         </nav>
 
         <div className="px-3 py-4 border-t border-[var(--border)]">
+          {email && (
+            <p
+              title={email}
+              className="hidden lg:block px-3 pb-2 truncate text-xs text-[var(--muted-foreground)]"
+            >
+              {email}
+            </p>
+          )}
           <form action={logout}>
             <button
               type="submit"
