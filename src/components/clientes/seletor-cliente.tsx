@@ -142,6 +142,29 @@ export function SeletorCliente({ clientes, value, onChange, disabled }: Props) {
 
       {aberto && (
         <div className="border border-[var(--border)] rounded-md max-h-52 overflow-y-auto bg-white">
+          {/* "+ Cadastrar" fica NO TOPO e fixo: com vários nomes parecidos ele
+              ficava no fim da lista, escondido pela rolagem — justamente
+              quando a pessoa quer cadastrar alguém novo. */}
+          {podeCadastrar && (
+            <button
+              type="button"
+              onClick={cadastrar}
+              disabled={isPending}
+              className="sticky top-0 z-10 flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-[var(--primary)] bg-white hover:bg-[var(--secondary)] border-b border-[var(--border)]"
+            >
+              <Plus className="w-4 h-4 shrink-0" />
+              <span className="truncate">
+                {isPending ? "Cadastrando..." : `Cadastrar novo cliente "${busca.trim()}"`}
+              </span>
+            </button>
+          )}
+
+          {podeCadastrar && resultados.length === 0 && (
+            <p className="px-3 py-2 text-sm text-[var(--muted-foreground)]">
+              Nenhum cliente com esse nome.
+            </p>
+          )}
+
           {resultados.map((c) => (
             <button
               key={c.id}
@@ -160,20 +183,6 @@ export function SeletorCliente({ clientes, value, onChange, disabled }: Props) {
             <p className="px-3 py-1.5 text-xs text-[var(--muted-foreground)]">
               +{totalFiltrados - resultados.length} — continue digitando para filtrar
             </p>
-          )}
-
-          {podeCadastrar && (
-            <button
-              type="button"
-              onClick={cadastrar}
-              disabled={isPending}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-[var(--primary)] hover:bg-[var(--secondary)] border-t border-[var(--border)] first:border-t-0"
-            >
-              <Plus className="w-4 h-4 shrink-0" />
-              <span className="truncate">
-                {isPending ? "Cadastrando..." : `Cadastrar "${busca.trim()}"`}
-              </span>
-            </button>
           )}
 
           {resultados.length === 0 && !podeCadastrar && (
