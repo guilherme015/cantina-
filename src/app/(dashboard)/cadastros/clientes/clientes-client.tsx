@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState, useTransition } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -20,19 +21,18 @@ import {
   reativarCliente,
 } from "@/app/actions/clientes"
 import { toast } from "@/hooks/use-toast"
+import { formatCurrency } from "@/lib/utils"
+import { deCentavos } from "@/lib/saldo-clientes"
+import { normalizarBusca as normalizar } from "@/lib/busca"
 import type { Cliente } from "@/types/database"
 
 interface Props {
   clientes: Cliente[]
+  // Saldo devedor em centavos por cliente_id (só contas em aberto).
+  saldos: Record<string, number>
 }
 
-// Busca sem diferenciar maiúscula/minúscula nem acento: quem digita "jose"
-// precisa achar "José".
-function normalizar(texto: string): string {
-  return texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
-}
-
-export function ClientesClient({ clientes }: Props) {
+export function ClientesClient({ clientes, saldos }: Props) {
   const [open, setOpen] = useState(false)
   const [editando, setEditando] = useState<Cliente | null>(null)
   const [busca, setBusca] = useState("")
@@ -150,14 +150,23 @@ export function ClientesClient({ clientes }: Props) {
                   <div className="w-10 h-10 shrink-0 rounded-lg bg-[var(--secondary)] flex items-center justify-center">
                     <Users className="w-5 h-5 text-[var(--muted-foreground)]" />
                   </div>
-                  <div className="min-w-0">
+                  <Link
+                    href={`/cadastros/clientes/${c.id}`}
+                    className="min-w-0 hover:underline"
+                    title="Ver dívidas e histórico"
+                  >
                     <p className="font-medium text-sm truncate">{c.nome}</p>
                     {c.telefone && (
                       <p className="text-xs text-[var(--muted-foreground)] truncate">{c.telefone}</p>
                     )}
-                  </div>
+                  </Link>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {(saldos[c.id] ?? 0) > 0 && (
+                    <Badge variant="destructive" title="Fiado em aberto">
+                      Deve {formatCurrency(deCentavos(saldos[c.id]))}
+                    </Badge>
+                  )}
                   {!c.ativo && <Badge variant="secondary">Arquivado</Badge>}
                   <Button
                     size="icon"

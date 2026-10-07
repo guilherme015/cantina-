@@ -151,8 +151,20 @@ CREATE TABLE IF NOT EXISTS tab_vendas (
   desconto NUMERIC(10, 2) DEFAULT 0 CHECK (desconto >= 0),
   forma_pagamento TEXT NOT NULL CHECK (forma_pagamento IN ('dinheiro', 'pix', 'cartao', 'fiado')),
   status TEXT DEFAULT 'pago' CHECK (status IN ('pendente', 'pago', 'cancelado')),
+  -- Cliente cadastrado (#56). `cliente` (texto) continua sendo a cópia do
+  -- nome no momento da venda, pra o histórico não mudar se o cliente for
+  -- renomeado. Nullable: venda à vista não exige cliente. A regra "fiado
+  -- exige cliente" mora em criarVenda, não num CHECK — um CHECK (mesmo NOT
+  -- VALID) também valida UPDATEs, e quebraria cancelarVenda numa venda
+  -- fiado antiga sem cliente_id.
+  cliente_id UUID,
   UNIQUE (igreja_id, numero_pedido),
-  UNIQUE (id, igreja_id)
+  UNIQUE (id, igreja_id),
+  -- Composta com igreja_id (#21). SEM ON DELETE SET NULL/CASCADE de
+  -- propósito (NO ACTION): excluir um cliente não pode soltar o vínculo da
+  -- dívida — cliente só é arquivado (ver tab_clientes).
+  CONSTRAINT tab_vendas_cliente_id_fkey
+    FOREIGN KEY (cliente_id, igreja_id) REFERENCES tab_clientes (id, igreja_id)
 );
 
 -- ============================================================
@@ -213,7 +225,13 @@ CREATE TABLE IF NOT EXISTS tab_contas_receber (
   -- Composta com igreja_id (#21), mesmo motivo de tab_extrato_financeiro.
   venda_id UUID,
   CONSTRAINT tab_contas_receber_venda_id_fkey
-    FOREIGN KEY (venda_id, igreja_id) REFERENCES tab_vendas (id, igreja_id) ON DELETE SET NULL (venda_id)
+    FOREIGN KEY (venda_id, igreja_id) REFERENCES tab_vendas (id, igreja_id) ON DELETE SET NULL (venda_id),
+  -- Dono da dívida (#56) — é por aqui que a #57 soma o que cada cliente
+  -- deve. `cliente` (texto) continua como cópia do nome. Composta com
+  -- igreja_id (#21) e NO ACTION de propósito: ver tab_vendas.cliente_id.
+  cliente_id UUID,
+  CONSTRAINT tab_contas_receber_cliente_id_fkey
+    FOREIGN KEY (cliente_id, igreja_id) REFERENCES tab_clientes (id, igreja_id)
 );
 
 -- ============================================================

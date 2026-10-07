@@ -14,6 +14,7 @@ import {
   Settings,
   UtensilsCrossed,
   Users,
+  ClipboardList,
   LogOut,
   Menu,
   X,
@@ -60,6 +61,11 @@ const navItems = [
     label: "Contas a Receber",
     href: "/financeiro/contas-receber",
     icon: ArrowDownCircle,
+  },
+  {
+    label: "Fiado por Cliente",
+    href: "/financeiro/fiado-por-cliente",
+    icon: ClipboardList,
   },
   {
     label: "Contas a Pagar",
