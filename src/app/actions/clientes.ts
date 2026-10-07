@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
-import type { Cliente } from "@/types/database"
+import { revalidarSaldosDeClientes } from "@/lib/revalidar-saldos"
+import type { Cliente, ContaReceber, Venda } from "@/types/database"
 
 const NOME_MAX = 100
 const TELEFONE_MAX = 30
@@ -14,9 +15,11 @@ type Resultado = { error?: string; success?: boolean }
 // Receber (#56) — criar, renomear ou arquivar precisa atualizar essas telas
 // também, não só a de Clientes.
 function revalidarTelasDeCliente() {
-  revalidatePath("/cadastros/clientes")
   revalidatePath("/vendas")
   revalidatePath("/financeiro/contas-receber")
+  // Clientes, detalhe do cliente e relatório Fiado por cliente (#57) —
+  // renomear ou arquivar muda o que aparece nelas.
+  revalidarSaldosDeClientes()
 }
 
 // Caracteres invisíveis (largura zero, word joiner, BOM): String.trim() e \s
@@ -157,4 +160,64 @@ export async function arquivarCliente(id: string): Promise<Resultado> {
 
 export async function reativarCliente(id: string): Promise<Resultado> {
   return definirAtivo(id, true)
+}
+
+export type CompraCliente = Pick<
+  Venda,
+  "id" | "numero_pedido" | "data_hora" | "total" | "forma_pagamento" | "status"
+>
+
+export type DetalheCliente = {
+  cliente: Cliente
+  contas: ContaReceber[]
+  compras: CompraCliente[]
+}
+
+const LIMITE_COMPRAS = 100
+
+// Dados da tela do cliente (#57). Devolve null só quando o cliente não existe
+// NESTA igreja (outra igreja, inexistente e id mal formado são
+// indistinguíveis → a página vira 404). Erro de banco nas listas lança em
+// vez de devolver lista vazia: uma tela que mostra "saldo R$ 0" por falha
+// de leitura é pior do que uma tela de erro.
+export async function obterDetalheCliente(id: string): Promise<DetalheCliente | null> {
+  const { supabase, user, igrejaId } = await getUsuarioEIgreja()
+  if (!user || !igrejaId) return null
+
+  const { data: cliente, error: errCliente } = await supabase
+    .from("tab_clientes")
+    .select("*")
+    .eq("id", id)
+    .eq("igreja_id", igrejaId)
+    .maybeSingle()
+
+  if (errCliente && errCliente.code === "22P02") return null
+  if (errCliente) throw new Error("Não foi possível carregar o cliente.")
+  if (!cliente) return null
+
+  const [contas, compras] = await Promise.all([
+    supabase
+      .from("tab_contas_receber")
+      .select("*")
+      .eq("igreja_id", igrejaId)
+      .eq("cliente_id", id)
+      .order("data_venda", { ascending: false })
+      .order("id")
+      .limit(1000),
+    supabase
+      .from("tab_vendas")
+      .select("id, numero_pedido, data_hora, total, forma_pagamento, status")
+      .eq("igreja_id", igrejaId)
+      .eq("cliente_id", id)
+      .order("data_hora", { ascending: false })
+      .limit(LIMITE_COMPRAS),
+  ])
+
+  if (contas.error || compras.error) throw new Error("Não foi possível carregar o histórico do cliente.")
+
+  return {
+    cliente: cliente as Cliente,
+    contas: (contas.data ?? []) as ContaReceber[],
+    compras: (compras.data ?? []) as CompraCliente[],
+  }
 }

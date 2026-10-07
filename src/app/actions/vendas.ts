@@ -7,6 +7,7 @@ import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import { buscarCliente, type ClienteResumo } from "@/lib/clientes"
+import { revalidarSaldosDeClientes } from "@/lib/revalidar-saldos"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -238,6 +239,7 @@ export async function criarVenda(dados: {
   revalidatePath("/financeiro/extrato")
   revalidatePath("/financeiro/fechamento")
   revalidatePath("/financeiro/contas-receber")
+  revalidarSaldosDeClientes()
   return { success: true }
 }
 
@@ -378,6 +380,7 @@ export async function cancelarVenda(id: string): Promise<{ error?: string; succe
   revalidatePath("/financeiro/extrato")
   revalidatePath("/financeiro/fechamento")
   revalidatePath("/financeiro/contas-receber")
+  revalidarSaldosDeClientes()
   return { success: true }
 }
 

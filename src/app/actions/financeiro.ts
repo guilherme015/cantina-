@@ -6,6 +6,7 @@ import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import { buscarCliente } from "@/lib/clientes"
+import { revalidarSaldosDeClientes } from "@/lib/revalidar-saldos"
 import { cancelarVenda } from "@/app/actions/vendas"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
@@ -163,17 +164,44 @@ export async function pagarConta(id: string): Promise<{ error?: string; success?
   return { success: true }
 }
 
-export async function listarContasReceber(): Promise<ContaReceber[]> {
+// O PostgREST do Supabase corta qualquer SELECT em 1000 linhas (max_rows) SEM
+// avisar. Contas a Receber acumula (toda venda fiado vira uma linha e as
+// pagas ficam) — passando de 1000, as mais antigas, que são justamente as
+// dívidas mais velhas ainda em aberto, sumiriam em silêncio e o saldo por
+// cliente (#57) sairia menor que o real. Por isso busca em páginas até
+// acabar. A ordenação precisa ser TOTAL (id como desempate): sem isso,
+// linhas com a mesma data podem se repetir ou pular entre páginas.
+const TAMANHO_PAGINA = 1000
+const MAX_PAGINAS = 200
+
+// Erro no meio devolve [] em vez de uma lista parcial: um total calculado
+// em cima de dados incompletos é pior que uma tela vazia.
+export async function listarContasReceber(
+  opcoes?: { apenasAbertas?: boolean }
+): Promise<ContaReceber[]> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user || !igrejaId) return []
 
-  const { data } = await supabase
-    .from("tab_contas_receber")
-    .select("*")
-    .eq("igreja_id", igrejaId)
-    .order("data_venda", { ascending: false })
+  const contas: ContaReceber[] = []
+  for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+    const inicio = pagina * TAMANHO_PAGINA
+    let consulta = supabase
+      .from("tab_contas_receber")
+      .select("*")
+      .eq("igreja_id", igrejaId)
+    if (opcoes?.apenasAbertas) consulta = consulta.eq("pago", false)
 
-  return (data ?? []) as ContaReceber[]
+    const { data, error } = await consulta
+      .order("data_venda", { ascending: false })
+      .order("id")
+      .range(inicio, inicio + TAMANHO_PAGINA - 1)
+
+    if (error || !data) return []
+    contas.push(...(data as ContaReceber[]))
+    if (data.length < TAMANHO_PAGINA) break
+  }
+
+  return contas
 }
 
 export async function editarContaReceber(id: string, dados: { cliente_id: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
@@ -229,6 +257,7 @@ export async function editarContaReceber(id: string, dados: { cliente_id: string
     return { error: "Conta não encontrada ou já recebida. Não é possível editar." }
   }
   revalidatePath("/financeiro/contas-receber")
+  revalidarSaldosDeClientes()
   return { success: true }
 }
 
@@ -312,6 +341,7 @@ export async function excluirContaReceber(id: string): Promise<{ error?: string;
     return { error: "Conta não encontrada ou já recebida. Não é possível excluir." }
   }
   revalidatePath("/financeiro/contas-receber")
+  revalidarSaldosDeClientes()
   return { success: true, vendaCancelada }
 }
 
@@ -480,6 +510,7 @@ export async function baixarContaReceber(id: string, formaPagamento: string): Pr
   }
 
   revalidatePath("/financeiro/contas-receber")
+  revalidarSaldosDeClientes()
   revalidatePath("/financeiro/extrato")
   revalidatePath("/financeiro/fechamento")
   revalidatePath("/vendas")
