@@ -10,11 +10,20 @@ const TELEFONE_MAX = 30
 
 type Resultado = { error?: string; success?: boolean }
 
+// Cliente cadastrado aparece também em Nova Venda e na edição de Contas a
+// Receber (#56) — criar, renomear ou arquivar precisa atualizar essas telas
+// também, não só a de Clientes.
+function revalidarTelasDeCliente() {
+  revalidatePath("/cadastros/clientes")
+  revalidatePath("/vendas")
+  revalidatePath("/financeiro/contas-receber")
+}
+
 // Caracteres invisíveis (largura zero, word joiner, BOM): String.trim() e \s
 // não removem, então "Maria" + U+200B virava um cliente diferente de
 // "Maria" com aparência idêntica, e um nome só com isso passava como
 // "preenchido".
-const INVISIVEIS = /[​-‍⁠﻿]/g
+const INVISIVEIS = new RegExp("[\\u200B-\\u200D\\u2060\\uFEFF]", "g")
 
 // A validação da tela (required/maxLength) é só UX — uma chamada direta à
 // action pula tudo isso, então confere de novo aqui. O nome é normalizado
@@ -71,7 +80,10 @@ export async function listarClientes(): Promise<Cliente[]> {
   return (data ?? []) as Cliente[]
 }
 
-export async function criarCliente(formData: FormData): Promise<Resultado> {
+// Devolve o cliente criado: Nova Venda cadastra "na hora" e já seleciona.
+export async function criarCliente(
+  formData: FormData
+): Promise<Resultado & { cliente?: Cliente }> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
@@ -79,17 +91,21 @@ export async function criarCliente(formData: FormData): Promise<Resultado> {
   const campos = lerCampos(formData)
   if ("error" in campos) return { error: campos.error }
 
-  const { error } = await supabase.from("tab_clientes").insert({
-    nome: campos.nome,
-    telefone: campos.telefone,
-    ativo: true,
-    user_id: user.id,
-    igreja_id: igrejaId,
-  })
+  const { data, error } = await supabase
+    .from("tab_clientes")
+    .insert({
+      nome: campos.nome,
+      telefone: campos.telefone,
+      ativo: true,
+      user_id: user.id,
+      igreja_id: igrejaId,
+    })
+    .select("*")
+    .single()
 
   if (error) return { error: mensagemDeErroCliente(error) }
-  revalidatePath("/cadastros/clientes")
-  return { success: true }
+  revalidarTelasDeCliente()
+  return { success: true, cliente: data as Cliente }
 }
 
 export async function editarCliente(id: string, formData: FormData): Promise<Resultado> {
@@ -113,7 +129,7 @@ export async function editarCliente(id: string, formData: FormData): Promise<Res
 
   if (error) return { error: mensagemDeErroCliente(error) }
   if (!data || data.length === 0) return { error: "Cliente não encontrado" }
-  revalidatePath("/cadastros/clientes")
+  revalidarTelasDeCliente()
   return { success: true }
 }
 
@@ -131,7 +147,7 @@ async function definirAtivo(id: string, ativo: boolean): Promise<Resultado> {
 
   if (error) return { error: mensagemDeErro(error) }
   if (!data || data.length === 0) return { error: "Cliente não encontrado" }
-  revalidatePath("/cadastros/clientes")
+  revalidarTelasDeCliente()
   return { success: true }
 }
 

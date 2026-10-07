@@ -20,16 +20,11 @@ import {
   reativarCliente,
 } from "@/app/actions/clientes"
 import { toast } from "@/hooks/use-toast"
+import { normalizarBusca as normalizar } from "@/lib/busca"
 import type { Cliente } from "@/types/database"
 
 interface Props {
   clientes: Cliente[]
-}
-
-// Busca sem diferenciar maiúscula/minúscula nem acento: quem digita "jose"
-// precisa achar "José".
-function normalizar(texto: string): string {
-  return texto.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
 }
 
 export function ClientesClient({ clientes }: Props) {

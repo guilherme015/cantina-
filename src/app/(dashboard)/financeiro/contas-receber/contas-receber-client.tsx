@@ -23,16 +23,20 @@ import { ArrowDownCircle, CheckCircle, Pencil, Trash2 } from "lucide-react"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import { baixarContaReceber, editarContaReceber, excluirContaReceber } from "@/app/actions/financeiro"
 import { toast } from "@/hooks/use-toast"
-import type { ContaReceber } from "@/types/database"
+import type { ContaReceber, Cliente } from "@/types/database"
 
 interface Props {
   contas: ContaReceber[]
+  // Todos os clientes (inclusive arquivados): a conta de um cliente arquivado
+  // continua editável sem trocar o dono — ver opcoesCliente abaixo.
+  clientes: Cliente[]
 }
 
-export function ContasReceberClient({ contas }: Props) {
+export function ContasReceberClient({ contas, clientes }: Props) {
   const [baixando, setBaixando] = useState<ContaReceber | null>(null)
   const [editando, setEditando] = useState<ContaReceber | null>(null)
   const [formaPagamento, setFormaPagamento] = useState("dinheiro")
+  const [clienteIdEdicao, setClienteIdEdicao] = useState("")
   const [isPending, startTransition] = useTransition()
 
   const abertas = contas.filter((c) => !c.pago)
@@ -54,12 +58,24 @@ export function ContasReceberClient({ contas }: Props) {
     })
   }
 
+  // Cliente ativo, ou o dono atual da conta mesmo se arquivado: arquivar não
+  // transfere nem perdoa a dívida, e editar o valor não pode obrigar a trocar
+  // o dono. Outro cliente arquivado não é oferecido (o servidor também recusa).
+  const opcoesCliente = editando
+    ? clientes.filter((c) => c.ativo || c.id === editando.cliente_id)
+    : []
+
+  function abrirEdicao(c: ContaReceber) {
+    setClienteIdEdicao(c.cliente_id ?? "")
+    setEditando(c)
+  }
+
   function handleEditar(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!editando) return
     const fd = new FormData(e.currentTarget)
     const dados = {
-      cliente: fd.get("cliente") as string,
+      cliente_id: clienteIdEdicao,
       valor_devido: parseFloat(fd.get("valor_devido") as string),
       data_venda: fd.get("data_venda") as string,
       descricao: (fd.get("descricao") as string) || undefined,
@@ -146,7 +162,7 @@ export function ContasReceberClient({ contas }: Props) {
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={() => setEditando(c)}
+                      onClick={() => abrirEdicao(c)}
                       disabled={isPending}
                     >
                       <Pencil className="w-3 h-3" />
@@ -244,7 +260,23 @@ export function ContasReceberClient({ contas }: Props) {
             <form onSubmit={handleEditar} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="edit-cliente">Cliente *</Label>
-                <Input id="edit-cliente" name="cliente" defaultValue={editando.cliente} required />
+                <Select value={clienteIdEdicao} onValueChange={setClienteIdEdicao}>
+                  <SelectTrigger id="edit-cliente">
+                    <SelectValue placeholder="Escolha o cliente" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {opcoesCliente.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.nome}{c.ativo ? "" : " (arquivado)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!editando.cliente_id && (
+                  <p className="text-xs text-amber-700">
+                    Esta conta ainda não está ligada a um cliente cadastrado ({editando.cliente || "sem nome"}). Escolha o cliente para ligá-la.
+                  </p>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
@@ -262,7 +294,7 @@ export function ContasReceberClient({ contas }: Props) {
               </div>
               <div className="flex gap-2 justify-end pt-2">
                 <Button type="button" variant="outline" onClick={() => setEditando(null)}>Cancelar</Button>
-                <Button type="submit" disabled={isPending}>{isPending ? "Salvando..." : "Salvar"}</Button>
+                <Button type="submit" disabled={isPending || !clienteIdEdicao}>{isPending ? "Salvando..." : "Salvar"}</Button>
               </div>
             </form>
           )}

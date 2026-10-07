@@ -6,6 +6,7 @@ import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { buscarCliente, type ClienteResumo } from "@/lib/clientes"
 import type { FormaPagamento, Item, Venda } from "@/types/database"
 
 export type VendaItem = {
@@ -61,7 +62,7 @@ export interface ItemVenda {
 }
 
 export async function criarVenda(dados: {
-  cliente: string
+  cliente_id: string | null
   forma_pagamento: FormaPagamento
   desconto: number
   itens: ItemVenda[]
@@ -77,6 +78,28 @@ export async function criarVenda(dados: {
 
   if (await diaFechado(supabase, igrejaId, hojeBR())) {
     return { error: "O caixa de hoje já foi fechado. Não é possível registrar novas vendas." }
+  }
+
+  // Cliente (#56): a tela manda só o id — o nome que fica gravado vem do
+  // cadastro, resolvido aqui no servidor dentro da igreja da sessão (mesma
+  // lógica do preço: o que a tela manda é só o que ela carregou). Fiado
+  // EXIGE cliente cadastrado: sem identificar a pessoa não dá pra cobrar, e
+  // a #57 soma a dívida por cliente_id. Venda à vista continua opcional.
+  // A regra mora aqui, não num CHECK no banco: um CHECK também valida
+  // UPDATE e quebraria cancelarVenda numa venda fiado antiga sem cliente_id.
+  let cliente: ClienteResumo | null = null
+  if (dados.cliente_id) {
+    const resultado = await buscarCliente(supabase, igrejaId, dados.cliente_id)
+    if (resultado.error) return { error: resultado.error }
+    // Arquivado conta como inexistente: a tela só oferece clientes ativos,
+    // então chegar aqui com um arquivado é aba antiga ou chamada direta.
+    if (!resultado.cliente || !resultado.cliente.ativo) {
+      return { error: "Cliente não encontrado ou arquivado. Atualize a página e escolha o cliente de novo." }
+    }
+    cliente = resultado.cliente
+  }
+  if (dados.forma_pagamento === "fiado" && !cliente) {
+    return { error: "Fiado exige um cliente cadastrado. Escolha ou cadastre o cliente." }
   }
 
   // A tela só oferece os produtos do cardápio de hoje, mas isso é só UI —
@@ -123,7 +146,10 @@ export async function criarVenda(dados: {
   const { data: venda, error: errVenda } = await supabase
     .from("tab_vendas")
     .insert({
-      cliente: dados.cliente || null,
+      // `cliente` (texto) é a cópia do nome no momento da venda: o
+      // histórico não muda se o cliente for renomeado depois.
+      cliente: cliente?.nome ?? null,
+      cliente_id: cliente?.id ?? null,
       forma_pagamento: dados.forma_pagamento,
       desconto,
       total,
@@ -160,8 +186,8 @@ export async function criarVenda(dados: {
 
   // numero_pedido (numerado por igreja, ver CLAUDE.md) em vez de fatia do
   // UUID — o UUID não tem nenhum significado pra quem opera o caixa.
-  const descricao = dados.cliente
-    ? `Venda para ${dados.cliente}`
+  const descricao = cliente
+    ? `Venda para ${cliente.nome}`
     : `Pedido #${venda.numero_pedido}`
 
   if (dados.forma_pagamento !== "fiado") {
@@ -187,7 +213,9 @@ export async function criarVenda(dados: {
     }
   } else {
     const { error: errContaReceber } = await supabase.from("tab_contas_receber").insert({
-      cliente: dados.cliente || "Cliente",
+      // cliente nunca é nulo aqui: fiado sem cliente foi recusado acima.
+      cliente: cliente!.nome,
+      cliente_id: cliente!.id,
       valor_devido: total,
       data_venda: hojeBR(),
       descricao,

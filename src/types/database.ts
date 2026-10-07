@@ -179,6 +179,7 @@ export interface Database {
           created_at: string
           numero_pedido: number
           cliente: string | null
+          cliente_id: string | null
           data_hora: string
           total: number
           desconto: number
@@ -192,6 +193,7 @@ export interface Database {
           created_at?: string
           numero_pedido?: number
           cliente?: string | null
+          cliente_id?: string | null
           data_hora?: string
           total: number
           desconto?: number
@@ -203,12 +205,21 @@ export interface Database {
         Update: {
           id?: string
           cliente?: string | null
+          cliente_id?: string | null
           total?: number
           desconto?: number
           forma_pagamento?: "dinheiro" | "pix" | "cartao" | "fiado"
           status?: "pendente" | "pago" | "cancelado"
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "tab_vendas_cliente_id_fkey"
+            columns: ["cliente_id", "igreja_id"]
+            isOneToOne: false
+            referencedRelation: "tab_clientes"
+            referencedColumns: ["id", "igreja_id"]
+          },
+        ]
       }
       tab_vendas_itens: {
         Row: {
@@ -316,6 +327,7 @@ export interface Database {
           data_baixa: string | null
           forma_pagamento_baixa: string | null
           venda_id: string | null
+          cliente_id: string | null
           user_id: string
           igreja_id: string
         }
@@ -330,6 +342,7 @@ export interface Database {
           data_baixa?: string | null
           forma_pagamento_baixa?: string | null
           venda_id?: string | null
+          cliente_id?: string | null
           user_id: string
           igreja_id: string
         }
@@ -343,6 +356,7 @@ export interface Database {
           data_baixa?: string | null
           forma_pagamento_baixa?: string | null
           venda_id?: string | null
+          cliente_id?: string | null
         }
         Relationships: [
           {
@@ -350,6 +364,13 @@ export interface Database {
             columns: ["venda_id", "igreja_id"]
             isOneToOne: false
             referencedRelation: "tab_vendas"
+            referencedColumns: ["id", "igreja_id"]
+          },
+          {
+            foreignKeyName: "tab_contas_receber_cliente_id_fkey"
+            columns: ["cliente_id", "igreja_id"]
+            isOneToOne: false
+            referencedRelation: "tab_clientes"
             referencedColumns: ["id", "igreja_id"]
           },
         ]

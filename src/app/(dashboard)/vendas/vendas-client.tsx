@@ -25,11 +25,14 @@ import { cn, formatCurrency, formatDateTime } from "@/lib/utils"
 import { criarVenda, cancelarVenda } from "@/app/actions/vendas"
 import type { VendaComItens, ItemVenda } from "@/app/actions/vendas"
 import { toast } from "@/hooks/use-toast"
-import type { Item, FormaPagamento } from "@/types/database"
+import { SeletorCliente } from "@/components/clientes/seletor-cliente"
+import type { Item, FormaPagamento, Cliente } from "@/types/database"
 
 interface Props {
   vendas: VendaComItens[]
   itensDisponiveis: Item[]
+  // Só clientes ativos (arquivado não é oferecido em Nova Venda).
+  clientes: Cliente[]
 }
 
 const FORMAS_PAGAMENTO: { value: FormaPagamento; label: string }[] = [
@@ -59,10 +62,10 @@ interface CarrinhoItem {
   valor_unitario: number
 }
 
-export function VendasClient({ vendas, itensDisponiveis }: Props) {
+export function VendasClient({ vendas, itensDisponiveis, clientes }: Props) {
   const [open, setOpen] = useState(false)
   const [carrinho, setCarrinho] = useState<CarrinhoItem[]>([])
-  const [cliente, setCliente] = useState("")
+  const [cliente, setCliente] = useState<Cliente | null>(null)
   const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>("dinheiro")
   const [desconto, setDesconto] = useState(0)
   const [isPending, startTransition] = useTransition()
@@ -70,6 +73,8 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
 
   const totalBruto = carrinho.reduce((s, i) => s + i.quantidade * i.valor_unitario, 0)
   const totalLiquido = Math.max(0, totalBruto - desconto)
+  // Fiado exige cliente cadastrado (o servidor também recusa).
+  const fiadoSemCliente = formaPagamento === "fiado" && !cliente
 
   function addItem(item: Item) {
     setCarrinho((prev) => {
@@ -97,7 +102,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
 
   function abrirNova() {
     setCarrinho([])
-    setCliente("")
+    setCliente(null)
     setFormaPagamento("dinheiro")
     setDesconto(0)
     setOpen(true)
@@ -109,6 +114,11 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
       return
     }
 
+    if (fiadoSemCliente) {
+      toast({ title: "Escolha o cliente", description: "Fiado exige um cliente cadastrado", variant: "destructive" })
+      return
+    }
+
     const itens: ItemVenda[] = carrinho.map((c) => ({
       item_id: c.item_id,
       nome: c.nome,
@@ -117,7 +127,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
     }))
 
     startTransition(async () => {
-      const result = await criarVenda({ cliente, forma_pagamento: formaPagamento, desconto, itens })
+      const result = await criarVenda({ cliente_id: cliente?.id ?? null, forma_pagamento: formaPagamento, desconto, itens })
       if (result.error) {
         toast({ title: "Erro", description: result.error, variant: "destructive" })
       } else {
@@ -263,14 +273,20 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Cliente (opcional)</Label>
-                <Input
-                  placeholder="Nome do cliente"
+                <Label>{formaPagamento === "fiado" ? "Cliente *" : "Cliente (opcional)"}</Label>
+                <SeletorCliente
+                  clientes={clientes}
                   value={cliente}
-                  onChange={(e) => setCliente(e.target.value)}
+                  onChange={setCliente}
+                  disabled={isPending}
                 />
+                {fiadoSemCliente && (
+                  <p className="text-xs text-red-600">
+                    Fiado exige um cliente cadastrado. Busque ou cadastre acima.
+                  </p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Forma de Pagamento</Label>
@@ -371,7 +387,7 @@ export function VendasClient({ vendas, itensDisponiveis }: Props) {
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>
                 Cancelar
               </Button>
-              <Button onClick={handleSubmit} disabled={isPending || carrinho.length === 0} className="gap-2">
+              <Button onClick={handleSubmit} disabled={isPending || carrinho.length === 0 || fiadoSemCliente} className="gap-2">
                 <CheckCircle className="w-4 h-4" />
                 {isPending ? "Registrando..." : `Finalizar — ${formatCurrency(totalLiquido)}`}
               </Button>

@@ -5,6 +5,7 @@ import { mensagemDeErro } from "@/lib/erros"
 import { diaFechado } from "@/lib/fechamento"
 import { dataBR, hojeBR, limitesDiaBR } from "@/lib/data-br"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
+import { buscarCliente } from "@/lib/clientes"
 import { cancelarVenda } from "@/app/actions/vendas"
 import type { ContaPagar, ContaReceber, ExtratoFinanceiro } from "@/types/database"
 
@@ -175,19 +176,45 @@ export async function listarContasReceber(): Promise<ContaReceber[]> {
   return (data ?? []) as ContaReceber[]
 }
 
-export async function editarContaReceber(id: string, dados: { cliente: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
+export async function editarContaReceber(id: string, dados: { cliente_id: string; valor_devido: number; data_venda: string; descricao?: string }): Promise<{ error?: string; success?: boolean }> {
   const { supabase, user, igrejaId } = await getUsuarioEIgreja()
   if (!user) return { error: "Não autenticado" }
   if (!igrejaId) return { error: "Nenhuma igreja associada à sua conta" }
 
-  if (!dados.cliente || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
+  if (!dados.cliente_id || isNaN(dados.valor_devido) || dados.valor_devido <= 0 || !dados.data_venda) {
     return { error: "Preencha todos os campos obrigatórios" }
+  }
+
+  // #56: trocar o cliente da conta é escolher outro cliente CADASTRADO (não
+  // digitar texto). O nome gravado em `cliente` vem do cadastro, resolvido
+  // aqui na igreja da sessão — nunca do que a tela mandar. Isso não muda a
+  // comparação de "valor editado" de #13 (continua só por valor, não por
+  // cliente) e não mexe no cliente da venda de origem, igual já era com o
+  // nome em texto.
+  const { cliente, error: errCliente } = await buscarCliente(supabase, igrejaId, dados.cliente_id)
+  if (errCliente) return { error: errCliente }
+  if (!cliente) return { error: "Cliente não encontrado. Atualize a página e escolha o cliente de novo." }
+
+  // Um cliente arquivado só serve se a conta já é dele (editar o valor de
+  // uma dívida de cliente arquivado não pode obrigar a trocar o dono):
+  // arquivar não perdoa nem transfere dívida.
+  if (!cliente.ativo) {
+    const { data: atual } = await supabase
+      .from("tab_contas_receber")
+      .select("cliente_id")
+      .eq("id", id)
+      .eq("igreja_id", igrejaId)
+      .maybeSingle()
+    if (atual?.cliente_id !== cliente.id) {
+      return { error: "Esse cliente está arquivado. Reative-o em Cadastros → Clientes ou escolha outro." }
+    }
   }
 
   const { data: linhas, error } = await supabase
     .from("tab_contas_receber")
     .update({
-      cliente: dados.cliente,
+      cliente: cliente.nome,
+      cliente_id: cliente.id,
       valor_devido: dados.valor_devido,
       data_venda: dados.data_venda,
       descricao: dados.descricao ?? null,
