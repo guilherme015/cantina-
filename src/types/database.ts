@@ -87,6 +87,33 @@ export interface Database {
         }
         Relationships: []
       }
+      tab_clientes: {
+        Row: {
+          id: string
+          created_at: string
+          user_id: string | null
+          igreja_id: string
+          nome: string
+          telefone: string | null
+          ativo: boolean
+        }
+        Insert: {
+          id?: string
+          created_at?: string
+          user_id?: string | null
+          igreja_id: string
+          nome: string
+          telefone?: string | null
+          ativo?: boolean
+        }
+        Update: {
+          id?: string
+          nome?: string
+          telefone?: string | null
+          ativo?: boolean
+        }
+        Relationships: []
+      }
       tab_cardapio_dia: {
         Row: {
           id: string
@@ -488,6 +515,7 @@ export interface Database {
 export type Igreja = Database["public"]["Tables"]["igrejas"]["Row"]
 export type IgrejaMembro = Database["public"]["Tables"]["igreja_membros"]["Row"]
 export type Item = Database["public"]["Tables"]["tab_itens"]["Row"]
+export type Cliente = Database["public"]["Tables"]["tab_clientes"]["Row"]
 export type CardapioDia = Database["public"]["Tables"]["tab_cardapio_dia"]["Row"]
 export type Venda = Database["public"]["Tables"]["tab_vendas"]["Row"]
 export type VendaItem = Database["public"]["Tables"]["tab_vendas_itens"]["Row"]

@@ -62,6 +62,40 @@ CREATE TABLE IF NOT EXISTS tab_itens (
 );
 
 -- ============================================================
+-- TABELA: tab_clientes (Clientes)
+-- ============================================================
+-- Cadastro de quem compra (principalmente no fiado). Existe pra vendas e
+-- contas a receber apontarem pra UMA pessoa em vez de um nome em texto
+-- livre — "Ana", "ana" e "Ana S." eram 3 pessoas pro sistema, então não
+-- dava pra somar quanto cada um deve (#55; vínculo com venda/fiado vem na
+-- #56, saldo devedor na #57).
+--
+-- Arquivar (ativo = false), não excluir: vendas e contas passam a
+-- referenciar o cliente, e excluir apagaria o vínculo do histórico.
+--
+-- user_id é nullable + SET NULL (não CASCADE): excluir a conta de quem
+-- cadastrou não pode apagar o cliente (e, nas próximas fases, perder o
+-- vínculo de dívida) — mesmo raciocínio de tab_fechamento_caixa (#23).
+--
+-- UNIQUE (id, igreja_id) sustenta a FK composta das fases seguintes
+-- (padrão #21). O índice único por nome normalizado impede "Ana"/"ana"/
+-- " Ana " duplicados dentro da mesma igreja; inclui os arquivados de
+-- propósito (reativar não pode esbarrar num duplicado criado depois).
+CREATE TABLE IF NOT EXISTS tab_clientes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  igreja_id UUID NOT NULL REFERENCES igrejas(id) ON DELETE CASCADE,
+  nome TEXT NOT NULL CHECK (btrim(nome) <> '' AND char_length(nome) <= 100),
+  telefone TEXT CHECK (char_length(telefone) <= 30),
+  ativo BOOLEAN NOT NULL DEFAULT TRUE,
+  UNIQUE (id, igreja_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tab_clientes_nome_unico
+  ON tab_clientes (igreja_id, lower(btrim(nome)));
+
+-- ============================================================
 -- TABELA: tab_cardapio_dia (Cardápio do Dia)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS tab_cardapio_dia (
@@ -289,6 +323,7 @@ GRANT EXECUTE ON FUNCTION private.minhas_igrejas() TO authenticated;
 ALTER TABLE igrejas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE igreja_membros ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_itens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tab_clientes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_cardapio_dia ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_cardapio_dia_itens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tab_vendas ENABLE ROW LEVEL SECURITY;
@@ -319,6 +354,27 @@ CREATE POLICY "membros_veem_colegas_de_igreja" ON igreja_membros
 CREATE POLICY "membros_igreja_itens" ON tab_itens
   FOR ALL TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
   WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+
+-- Políticas para tab_clientes: SELECT/INSERT/UPDATE separadas, sem DELETE
+-- de propósito — cliente só é arquivado (ativo = false), nunca excluído.
+-- Com uma policy FOR ALL, qualquer membro conseguia DELETE direto pela API
+-- (o app não oferece exclusão, mas isso só valia na tela); como venda e
+-- conta a receber vão apontar pro cliente (#56), apagar um cliente
+-- levaria o vínculo da dívida junto. O REVOKE logo abaixo trava o DELETE
+-- (e o TRUNCATE) também no nível de privilégio, mesmo padrão de
+-- tab_fechamento_caixa. Apagar a igreja (ON DELETE CASCADE) continua
+-- funcionando: a cascata roda sem passar por RLS/privilégio de cliente.
+CREATE POLICY "membros_igreja_clientes_select" ON tab_clientes
+  FOR SELECT TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()));
+
+CREATE POLICY "membros_igreja_clientes_insert" ON tab_clientes
+  FOR INSERT TO authenticated WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+
+CREATE POLICY "membros_igreja_clientes_update" ON tab_clientes
+  FOR UPDATE TO authenticated USING (igreja_id IN (SELECT private.minhas_igrejas()))
+  WITH CHECK (igreja_id IN (SELECT private.minhas_igrejas()));
+
+REVOKE DELETE, TRUNCATE ON tab_clientes FROM anon, authenticated;
 
 -- Políticas para tab_cardapio_dia
 CREATE POLICY "membros_igreja_cardapio" ON tab_cardapio_dia
