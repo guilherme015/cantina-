@@ -13,6 +13,7 @@ import {
   Lock,
   Settings,
   UtensilsCrossed,
+  Users,
   LogOut,
   Menu,
   X,
@@ -40,6 +41,11 @@ const navItems = [
     label: "Produtos",
     href: "/cadastros/produtos",
     icon: Package,
+  },
+  {
+    label: "Clientes",
+    href: "/cadastros/clientes",
+    icon: Users,
   },
   {
     label: "Separador",
