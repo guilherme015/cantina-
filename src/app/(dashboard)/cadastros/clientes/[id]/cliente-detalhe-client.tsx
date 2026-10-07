@@ -8,6 +8,7 @@ import { CheckCircle, Phone } from "lucide-react"
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/utils"
 import { deCentavos, totalEmAbertoCentavos } from "@/lib/saldo-clientes"
 import { BaixarContaDialog } from "@/components/financeiro/baixar-conta-dialog"
+import { LIMITE_RECEBIDAS_DETALHE } from "@/lib/contas-receber"
 import type { DetalheCliente } from "@/app/actions/clientes"
 import type { ContaReceber } from "@/types/database"
 
@@ -96,7 +97,8 @@ export function ClienteDetalheClient({ detalhe }: { detalhe: DetalheCliente }) {
         <Card className="mb-4">
           <CardHeader>
             <CardTitle className="text-base text-[var(--muted-foreground)]">
-              Já recebido ({recebidas.length})
+              Já recebido ({recebidas.length}
+              {recebidas.length >= LIMITE_RECEBIDAS_DETALHE ? `, só os ${LIMITE_RECEBIDAS_DETALHE} mais recentes` : ""})
             </CardTitle>
           </CardHeader>
           <CardContent>

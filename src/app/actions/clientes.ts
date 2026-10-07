@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { mensagemDeErro } from "@/lib/erros"
 import { getUsuarioEIgreja } from "@/lib/auth-contexto"
 import { revalidarSaldosDeClientes } from "@/lib/revalidar-saldos"
+import { buscarContasReceber, LIMITE_RECEBIDAS_DETALHE } from "@/lib/contas-receber"
 import type { Cliente, ContaReceber, Venda } from "@/types/database"
 
 const NOME_MAX = 100
@@ -195,15 +196,20 @@ export async function obterDetalheCliente(id: string): Promise<DetalheCliente | 
   if (errCliente) throw new Error("Não foi possível carregar o cliente.")
   if (!cliente) return null
 
-  const [contas, compras] = await Promise.all([
+  // As ABERTAS vêm todas, paginadas (é delas que sai o saldo — cortar uma
+  // dívida antiga faria o "Em aberto" sair menor que o real). As RECEBIDAS
+  // são só histórico: as últimas LIMITE_RECEBIDAS_DETALHE.
+  const [abertas, recebidas, compras] = await Promise.all([
+    buscarContasReceber(supabase, igrejaId, { apenasAbertas: true, clienteId: id }),
     supabase
       .from("tab_contas_receber")
       .select("*")
       .eq("igreja_id", igrejaId)
       .eq("cliente_id", id)
-      .order("data_venda", { ascending: false })
+      .eq("pago", true)
+      .order("data_baixa", { ascending: false, nullsFirst: false })
       .order("id")
-      .limit(1000),
+      .limit(LIMITE_RECEBIDAS_DETALHE),
     supabase
       .from("tab_vendas")
       .select("id, numero_pedido, data_hora, total, forma_pagamento, status")
@@ -213,11 +219,15 @@ export async function obterDetalheCliente(id: string): Promise<DetalheCliente | 
       .limit(LIMITE_COMPRAS),
   ])
 
-  if (contas.error || compras.error) throw new Error("Não foi possível carregar o histórico do cliente.")
+  if (abertas.falhou || recebidas.error || compras.error) {
+    throw new Error("Não foi possível carregar o histórico do cliente.")
+  }
+
+  const contas = [...abertas.contas, ...((recebidas.data ?? []) as ContaReceber[])]
 
   return {
     cliente: cliente as Cliente,
-    contas: (contas.data ?? []) as ContaReceber[],
+    contas,
     compras: (compras.data ?? []) as CompraCliente[],
   }
 }

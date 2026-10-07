@@ -10,14 +10,22 @@
 --      cadastrado e ganha cliente_id. Sem isso, o fiado antigo não entra
 --      no saldo por cliente da #57.
 --
--- É idempotente (pode rodar de novo). Rode DEPOIS de aplicar o código
--- novo também se alguma venda for lançada entre a migração e o deploy: o
--- código antigo grava só o nome em texto, e rodar o script de novo vincula
--- essas linhas.
+-- ORDEM: rode este script ANTES de publicar o código novo e publique logo
+-- em seguida. Se o código sair primeiro, TODA venda falha (a coluna
+-- cliente_id ainda não existe); se a migração sair muito antes do deploy,
+-- o código antigo continua gravando só o nome em texto.
+--
+-- É idempotente (pode rodar de novo, inclusive na mesma sessão): rodar de
+-- novo depois do deploy vincula o que o código antigo gravou só em texto
+-- (cliente_id nulo). Limite conhecido: o backfill só olha linhas com
+-- cliente_id NULO — se o código antigo editar o NOME de uma conta que o
+-- backfill já ligou, o texto passa a divergir do cliente_id; rodar de novo
+-- não corrige isso. Por isso: publique logo depois de migrar.
 --
 -- ALTERA tabelas existentes (tab_vendas, tab_contas_receber) — rode fora
 -- do horário de uso (não durante um culto). O lock_timeout abaixo faz o
--- script falhar rápido, sem travar o app, se não conseguir a trava.
+-- script falhar rápido, sem travar o app, se não conseguir a trava. Se
+-- falhar por lock_timeout, é só tentar de novo em outro momento.
 --
 -- Depois de rodar, supabase/schema.sql continua sendo a referência do
 -- estado do banco (ele já inclui as colunas e FKs).
@@ -25,7 +33,12 @@
 
 BEGIN;
 
-SET LOCAL lock_timeout = '10s';
+-- 3s, MENOR que o statement_timeout do role authenticated no Supabase (8s):
+-- enquanto o ALTER espera a trava, as requisições do app ficam na fila atrás
+-- dele; com um timeout maior que o delas, elas estourariam antes de o script
+-- desistir (e criarVenda, que faz vários passos sem transação, poderia
+-- deixar uma venda órfã). Falhar rápido é o comportamento certo.
+SET LOCAL lock_timeout = '3s';
 
 -- ------------------------------------------------------------
 -- 1. Colunas e FKs
@@ -63,8 +76,10 @@ $$;
 -- Mesma normalização de normalizarNome (src/app/actions/clientes.ts):
 -- NFC, remove caracteres invisíveis, colapsa espaços, tira as pontas e
 -- corta em 100 caracteres (limite do CHECK de tab_clientes.nome). Função
--- temporária (pg_temp): some sozinha no fim da sessão.
-CREATE FUNCTION pg_temp.norm_nome(t TEXT) RETURNS TEXT
+-- temporária (pg_temp): some sozinha no fim da sessão; CREATE OR REPLACE
+-- porque ela sobrevive ao COMMIT e rodar o script de novo na mesma sessão
+-- falharia com 42723.
+CREATE OR REPLACE FUNCTION pg_temp.norm_nome(t TEXT) RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $$
   SELECT left(
     btrim(
